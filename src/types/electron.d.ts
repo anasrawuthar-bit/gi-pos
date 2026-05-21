@@ -60,6 +60,7 @@ declare global {
     posPrinter?: {
       listPrinters: () => Promise<PrinterInfo[]>
       printReceipt: (payload: unknown) => Promise<{ ok: boolean; mode: string }>
+      printReport: (payload: unknown) => Promise<{ ok: boolean; mode: string }>
       printTest: (settings: ReceiptPrinterSettings) => Promise<{ ok: boolean; mode: string }>
       printKot: (payload: unknown) => Promise<{ ok: boolean; mode: string }>
       printKotTest: (payload: unknown) => Promise<{ ok: boolean; mode: string }>

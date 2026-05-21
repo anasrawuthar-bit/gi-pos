@@ -189,6 +189,7 @@ Current desktop cloud sync includes these local app keys:
 
 - `pos-business-profile`: billing business name, owner, branch, phone, address, GSTIN, receipt footer, billing logo
 - `pos-categories`: menu categories and priority/order
+- `pos-dining-table-groups`: dining area names and table lists used by POS seating
 - `pos-menu-items`: menu item names, category, price, tags, item photos
 - `pos-customers`: customer profile, phone, address, credit balance
 - `pos-orders`: saved bills/orders, cart lines, payment method, totals, due/paid status
@@ -212,10 +213,22 @@ The desktop updater checks:
 https://goldensea.gihostings.in/updates/win/latest.yml
 ```
 
-Copy these files from the desktop build `release/` folder into `cloud/updates/win/` on the VPS:
+Recommended: open GI admin panel and upload the update files:
+
+```text
+https://goldensea.gihostings.in/admin
+```
+
+Use `Windows App Update` and select all three files from the desktop build `release/` folder:
 
 - `latest.yml`
 - `GI POS Restaurant Setup 1.1.19.exe`
 - `GI POS Restaurant Setup 1.1.19.exe.blockmap`
+
+The admin panel validates that `latest.yml` points to the selected setup `.exe` and that the `.blockmap` filename matches the setup file.
+
+If the VPS shows `413 Request Entity Too Large`, increase Nginx `client_max_body_size` to `400m` and reload Nginx.
+
+Manual fallback: copy those files into `cloud/updates/win/` on the VPS.
 
 You can also set `GI_UPDATE_DIR=/absolute/path/to/updates/win` before starting the cloud server.

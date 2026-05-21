@@ -45,6 +45,8 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
+
+  mainWindow.maximize();
 }
 
 app.whenReady().then(async () => {
@@ -245,6 +247,18 @@ ipcMain.handle('receipt:print-test', async (_event, settings) => {
   return { ok: true, mode: 'system' };
 });
 
+ipcMain.handle('report:print', async (_event, payload) => {
+  const settings = payload?.settings || {};
+
+  if (settings.mode === 'network') {
+    await printNetworkReport(payload);
+    return { ok: true, mode: 'network' };
+  }
+
+  await printSystemReport(payload);
+  return { ok: true, mode: 'system' };
+});
+
 ipcMain.handle('kot:print', async (_event, payload) => {
   const settings = payload?.settings || {};
 
@@ -286,53 +300,23 @@ ipcMain.handle('kot:print-test', async (_event, payload) => {
 });
 
 function printSystemReceipt(payload) {
-  const settings = payload?.settings || {};
-  const deviceName = settings.deviceName || '';
-
-  return new Promise((resolve, reject) => {
-    const receiptWindow = new BrowserWindow({
-      width: 420,
-      height: 700,
-      show: false,
-      webPreferences: {
-        sandbox: true,
-      },
-    });
-
-    receiptWindow.webContents.once('did-finish-load', () => {
-      const options = {
-        silent: true,
-        printBackground: true,
-        margins: { marginType: 'none' },
-        deviceName,
-        pageSize: {
-          width: (settings.paperWidth === '58' ? 58000 : 80000),
-          height: 1000000,
-        },
-      };
-
-      receiptWindow.webContents.print(options, (success, errorType) => {
-        receiptWindow.close();
-        if (success) {
-          resolve();
-        } else {
-          reject(new Error(errorType || 'Printer rejected the print job'));
-        }
-      });
-    });
-
-    receiptWindow.loadURL(
-      `data:text/html;charset=utf-8,${encodeURIComponent(buildReceiptHtml(payload))}`,
-    );
-  });
+  return printSystemHtml(payload, buildReceiptHtml(payload), 'Printer rejected the print job');
 }
 
 function printSystemKot(payload) {
+  return printSystemHtml(payload, buildKotHtml(payload), 'Printer rejected the KOT print job');
+}
+
+function printSystemReport(payload) {
+  return printSystemHtml(payload, buildReportHtml(payload), 'Printer rejected the report print job');
+}
+
+function printSystemHtml(payload, html, rejectionMessage) {
   const settings = payload?.settings || {};
   const deviceName = settings.deviceName || '';
 
   return new Promise((resolve, reject) => {
-    const kotWindow = new BrowserWindow({
+    const printWindow = new BrowserWindow({
       width: 420,
       height: 700,
       show: false,
@@ -341,32 +325,58 @@ function printSystemKot(payload) {
       },
     });
 
-    kotWindow.webContents.once('did-finish-load', () => {
-      const options = {
-        silent: true,
-        printBackground: true,
-        margins: { marginType: 'none' },
-        deviceName,
-        pageSize: {
-          width: (settings.paperWidth === '58' ? 58000 : 80000),
-          height: 1000000,
-        },
-      };
+    printWindow.webContents.once('did-finish-load', async () => {
+      try {
+        const options = {
+          silent: true,
+          printBackground: true,
+          margins: { marginType: 'none' },
+          deviceName,
+          pageSize: {
+            width: getPaperWidthMicrons(settings),
+            height: await getPrintContentHeightMicrons(printWindow),
+          },
+        };
 
-      kotWindow.webContents.print(options, (success, errorType) => {
-        kotWindow.close();
-        if (success) {
-          resolve();
-        } else {
-          reject(new Error(errorType || 'Printer rejected the KOT print job'));
-        }
-      });
+        printWindow.webContents.print(options, (success, errorType) => {
+          printWindow.close();
+          if (success) {
+            resolve();
+          } else {
+            reject(new Error(errorType || rejectionMessage));
+          }
+        });
+      } catch (error) {
+        printWindow.close();
+        reject(error);
+      }
     });
 
-    kotWindow.loadURL(
-      `data:text/html;charset=utf-8,${encodeURIComponent(buildKotHtml(payload))}`,
-    );
+    printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
   });
+}
+
+async function getPrintContentHeightMicrons(printWindow) {
+  const contentHeightPx = await printWindow.webContents.executeJavaScript(
+    `
+      Math.ceil(Math.max(
+        document.body.scrollHeight,
+        document.body.offsetHeight,
+        document.documentElement.scrollHeight,
+        document.documentElement.offsetHeight
+      ))
+    `,
+    true,
+  );
+  const safeHeightPx = Math.max(Number(contentHeightPx || 0), 120);
+  const micronsPerCssPixel = 25400 / 96;
+  const feedMarginMicrons = 6000;
+
+  return Math.ceil(safeHeightPx * micronsPerCssPixel + feedMarginMicrons);
+}
+
+function getPaperWidthMicrons(settings) {
+  return settings.paperWidth === '58' ? 58000 : 80000;
 }
 
 function printNetworkReceipt(payload) {
@@ -399,6 +409,50 @@ function printNetworkReceipt(payload) {
 
     socket.setTimeout(6000);
     socket.once('timeout', () => finish(new Error('Network printer timed out')));
+    socket.once('error', finish);
+    socket.connect(port, host, () => {
+      socket.write(body, (error) => {
+        if (error) {
+          finish(error);
+          return;
+        }
+        socket.end();
+      });
+    });
+    socket.once('close', () => finish());
+  });
+}
+
+function printNetworkReport(payload) {
+  const settings = payload?.settings || {};
+  const host = settings.ipAddress;
+  const port = Number(settings.port || 9100);
+
+  if (!host) {
+    throw new Error('Printer IP address is required for network report printing');
+  }
+
+  const body = buildEscPosReport(payload);
+
+  return new Promise((resolve, reject) => {
+    const socket = new net.Socket();
+    let settled = false;
+
+    const finish = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.destroy();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+
+    socket.setTimeout(6000);
+    socket.once('timeout', () => finish(new Error('Network report printer timed out')));
     socket.once('error', finish);
     socket.connect(port, host, () => {
       socket.write(body, (error) => {
@@ -546,6 +600,77 @@ function buildReceiptHtml(payload) {
         </table>
         <div class="rule"></div>
         <div class="center thanks">${escapeHtml(footerNote)}</div>
+      </body>
+    </html>
+  `;
+}
+
+function buildReportHtml(payload) {
+  const report = payload.report || {};
+  const business = report.business || {};
+  const businessName = business.name || 'Restaurant';
+  const paperWidth = payload?.settings?.paperWidth === '58' ? 58 : 80;
+  const generatedAt = new Date(report.generatedAt || Date.now());
+  const orderTypeRows = (report.orderTypeRows || [])
+    .map((row) => `<tr><td>${escapeHtml(row.label)} x ${Number(row.count || 0)}</td><td>${money(row.total)}</td></tr>`)
+    .join('');
+
+  return `
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          @page { margin: 0; size: ${paperWidth}mm auto; }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            padding: 10px;
+            width: ${paperWidth}mm;
+            color: #111;
+            font-family: "Arial", "Segoe UI", sans-serif;
+            font-size: ${paperWidth === 58 ? 10 : 12}px;
+          }
+          .center { text-align: center; }
+          .shop { font-size: ${paperWidth === 58 ? 15 : 18}px; font-weight: 800; }
+          .title { margin-top: 4px; font-size: ${paperWidth === 58 ? 13 : 15}px; font-weight: 800; }
+          .muted { color: #333; }
+          .rule { border-top: 1px dashed #111; margin: 8px 0; }
+          table { width: 100%; border-collapse: collapse; }
+          td { padding: 2px 0; vertical-align: top; }
+          td:last-child { text-align: right; white-space: nowrap; padding-left: 8px; }
+          .grand td { font-size: ${paperWidth === 58 ? 14 : 17}px; font-weight: 800; border-top: 1px solid #111; padding-top: 6px; }
+          .section { margin-top: 8px; font-weight: 800; }
+          .thanks { margin-top: 10px; font-weight: 700; }
+        </style>
+      </head>
+      <body>
+        <div class="center">
+          <div class="shop">${escapeHtml(businessName)}</div>
+          ${business.branch ? `<div class="muted">${escapeHtml(business.branch)}</div>` : ''}
+          ${business.phone ? `<div class="muted">Phone: ${escapeHtml(business.phone)}</div>` : ''}
+          <div class="title">${escapeHtml(report.title || 'Sales Report')}</div>
+          <div class="muted">${escapeHtml(report.periodLabel || '')}</div>
+          <div class="muted">${escapeHtml(formatDateTime(generatedAt))}</div>
+        </div>
+        <div class="rule"></div>
+        <table>
+          <tr class="grand"><td>Total Sales</td><td>${money(report.salesTotal)}</td></tr>
+          <tr><td>Paid Bills</td><td>${Number(report.paidCount || 0)}</td></tr>
+          <tr><td>Cash In Hand</td><td>${money(report.cashInHand)}</td></tr>
+          <tr><td>UPI</td><td>${money(report.upiTotal)}</td></tr>
+          <tr><td>Card</td><td>${money(report.cardTotal)}</td></tr>
+          <tr><td>Bank</td><td>${money(report.bankTotal)}</td></tr>
+          <tr><td>Due / Credit</td><td>${money(report.balanceTotal)}</td></tr>
+          <tr><td>Discount</td><td>${money(report.discountTotal)}</td></tr>
+          <tr><td>Open Amount</td><td>${money(report.openTotal)}</td></tr>
+          <tr><td>Open Bills</td><td>${Number(report.openCount || 0)}</td></tr>
+        </table>
+        <div class="rule"></div>
+        <div class="section">Order Type</div>
+        <table>${orderTypeRows || '<tr><td>No orders</td><td>0.00</td></tr>'}</table>
+        <div class="rule"></div>
+        <div class="center thanks">End of report</div>
       </body>
     </html>
   `;
@@ -712,6 +837,55 @@ function buildEscPosKot(payload) {
   text(parts, line(columns));
   align(parts, 1);
   text(parts, 'Kitchen Order Ticket\n\n\n');
+  push(parts, [0x1d, 0x56, 0x42, 0x00]);
+
+  return Buffer.concat(parts);
+}
+
+function buildEscPosReport(payload) {
+  const report = payload.report || {};
+  const business = report.business || {};
+  const businessName = business.name || 'Restaurant';
+  const paperWidth = payload?.settings?.paperWidth === '58' ? 58 : 80;
+  const columns = paperWidth === 58 ? 32 : 48;
+  const parts = [];
+
+  push(parts, [0x1b, 0x40]);
+  align(parts, 1);
+  size(parts, 0x11);
+  text(parts, `${businessName}\n`);
+  size(parts, 0x00);
+  bold(parts, true);
+  text(parts, `${report.title || 'Sales Report'}\n`);
+  bold(parts, false);
+  text(parts, `${report.periodLabel || ''}\n`);
+  text(parts, `${formatDateTime(new Date(report.generatedAt || Date.now()))}\n`);
+  text(parts, line(columns));
+  align(parts, 0);
+  bold(parts, true);
+  text(parts, twoCol('Total Sales', money(report.salesTotal), columns));
+  bold(parts, false);
+  text(parts, twoCol('Paid Bills', String(Number(report.paidCount || 0)), columns));
+  text(parts, twoCol('Cash In Hand', money(report.cashInHand), columns));
+  text(parts, twoCol('UPI', money(report.upiTotal), columns));
+  text(parts, twoCol('Card', money(report.cardTotal), columns));
+  text(parts, twoCol('Bank', money(report.bankTotal), columns));
+  text(parts, twoCol('Due / Credit', money(report.balanceTotal), columns));
+  text(parts, twoCol('Discount', money(report.discountTotal), columns));
+  text(parts, twoCol('Open Amount', money(report.openTotal), columns));
+  text(parts, twoCol('Open Bills', String(Number(report.openCount || 0)), columns));
+  text(parts, line(columns));
+
+  bold(parts, true);
+  text(parts, 'Order Type\n');
+  bold(parts, false);
+  for (const row of report.orderTypeRows || []) {
+    text(parts, twoCol(`${row.label} x ${Number(row.count || 0)}`, money(row.total), columns));
+  }
+
+  text(parts, line(columns));
+  align(parts, 1);
+  text(parts, 'End of report\n\n\n');
   push(parts, [0x1d, 0x56, 0x42, 0x00]);
 
   return Buffer.concat(parts);

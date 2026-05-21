@@ -819,6 +819,7 @@ button {
 
 .menu-editor-panel,
 .table-panel,
+.table-setup-panel,
 .orders-panel,
 .report-panel,
 .quick-panel,
@@ -835,6 +836,11 @@ button {
 
 .table-panel {
   width: min(720px, calc(100vw - 32px));
+  gap: 12px;
+}
+
+.table-setup-panel {
+  width: min(900px, calc(100vw - 32px));
 }
 
 .orders-panel,
@@ -1331,6 +1337,12 @@ button {
   background: #1d4ed8;
 }
 
+.paper-row small {
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .printer-section-title {
   display: flex;
   align-items: end;
@@ -1746,6 +1758,224 @@ button {
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   gap: 8px;
   overflow-y: auto;
+}
+
+.table-setup-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 285px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.table-area-list,
+.table-area-editor {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 7px;
+}
+
+.table-area-buttons {
+  display: grid;
+  gap: 7px;
+  max-height: 390px;
+  overflow-y: auto;
+}
+
+.table-area-buttons button {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  color: #111827;
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-radius: 6px;
+  text-align: left;
+}
+
+.table-area-buttons button.active {
+  color: #ffffff;
+  background: #c1121f;
+  border-color: #a50f1a;
+}
+
+.table-area-buttons strong,
+.table-area-buttons span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-area-buttons span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.table-area-buttons button.active span {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.table-setup-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.table-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(62px, 1fr));
+  gap: 7px;
+  min-height: 42px;
+  padding: 10px;
+  background: #ffffff;
+  border: 1px dashed #cbd5e1;
+  border-radius: 7px;
+}
+
+.table-preview-grid span {
+  display: grid;
+  place-items: center;
+  min-height: 30px;
+  color: #111827;
+  background: #eef2f7;
+  border-radius: 5px;
+  font-weight: 900;
+}
+
+.table-group-tabs,
+.seating-mode-tabs,
+.discount-mode-tabs {
+  display: grid;
+  gap: 8px;
+}
+
+.seating-mode-tabs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.table-group-tabs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.table-group-tabs button,
+.seating-mode-tabs button,
+.discount-mode-tabs button {
+  min-width: 0;
+  color: #111827;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 6px;
+  font-weight: 800;
+}
+
+.table-group-tabs button {
+  min-height: 56px;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  padding: 8px;
+  text-align: left;
+}
+
+.table-group-tabs span {
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.table-group-tabs button.active,
+.seating-mode-tabs button.active,
+.discount-mode-tabs button.active {
+  color: #ffffff;
+  background: #0891b2;
+  border-color: #0f766e;
+}
+
+.table-group-tabs button.active span {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.discount-mode-tabs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.seating-mode-tabs button,
+.discount-mode-tabs button {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.group-seat-bar {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.2fr) auto;
+  gap: 8px;
+  align-items: end;
+  padding: 10px;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 7px;
+}
+
+.group-seat-bar label {
+  display: grid;
+  gap: 5px;
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.group-seat-bar input {
+  height: 36px;
+}
+
+.group-seat-summary {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-radius: 6px;
+}
+
+.group-seat-summary span,
+.group-seat-summary strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-seat-summary span {
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.discount-preview {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 7px 12px;
+  margin-top: 12px;
+  padding: 10px;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 6px;
+}
+
+.discount-preview span {
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .table-tile {
@@ -2220,6 +2450,7 @@ button {
 .pos-shell .item-form select,
 .pos-shell .dialog-field input,
 .pos-shell .dialog-field textarea,
+.pos-shell .group-seat-bar input,
 .pos-shell .part-payment-grid input,
 .pos-shell .customer-search-box input,
 .pos-shell .customer-sort-field select,
@@ -2242,6 +2473,7 @@ button {
 .pos-shell .item-form select:focus,
 .pos-shell .dialog-field input:focus,
 .pos-shell .dialog-field textarea:focus,
+.pos-shell .group-seat-bar input:focus,
 .pos-shell .part-payment-grid input:focus,
 .pos-shell .orders-date-filter input:focus,
 .pos-shell .customer-sort-field select:focus,
@@ -2469,6 +2701,7 @@ button {
 .pos-shell .printer-panel,
 .pos-shell .menu-editor-panel,
 .pos-shell .table-panel,
+.pos-shell .table-setup-panel,
 .pos-shell .orders-panel,
 .pos-shell .report-panel,
 .pos-shell .quick-panel,
@@ -2491,6 +2724,10 @@ button {
 }
 
 .pos-shell .segmented button {
+  color: var(--text-muted);
+}
+
+.pos-shell .paper-row small {
   color: var(--text-muted);
 }
 
@@ -2544,15 +2781,51 @@ button {
 }
 
 .pos-shell .kot-station-tabs button,
-.pos-shell .kot-station-card {
+.pos-shell .kot-station-card,
+.pos-shell .table-area-list,
+.pos-shell .table-area-editor,
+.pos-shell .table-area-buttons button,
+.pos-shell .table-preview-grid,
+.pos-shell .table-preview-grid span,
+.pos-shell .group-seat-bar,
+.pos-shell .group-seat-summary,
+.pos-shell .seating-mode-tabs button,
+.pos-shell .table-group-tabs button,
+.pos-shell .discount-mode-tabs button,
+.pos-shell .discount-preview {
   color: var(--text);
   background: var(--surface-2);
   border-color: var(--border);
 }
 
-.pos-shell .table-tile.active {
+.pos-shell .table-group-tabs span,
+.pos-shell .table-area-buttons span,
+.pos-shell .group-seat-bar label,
+.pos-shell .group-seat-summary span,
+.pos-shell .discount-preview span {
+  color: var(--text-muted);
+}
+
+.pos-shell .table-area-buttons button.active {
+  color: #ffffff;
+  background: var(--primary);
+  border-color: var(--primary-strong);
+}
+
+.pos-shell .table-area-buttons button.active span {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.pos-shell .table-tile.active,
+.pos-shell .seating-mode-tabs button.active,
+.pos-shell .table-group-tabs button.active,
+.pos-shell .discount-mode-tabs button.active {
   background: var(--accent);
   border-color: var(--accent-strong);
+}
+
+.pos-shell .table-group-tabs button.active span {
+  color: color-mix(in srgb, #ffffff 82%, var(--accent));
 }
 
 .pos-shell .table-tile.unclosed {
@@ -2984,6 +3257,13 @@ button {
 
 .pos-shell .page-head {
   margin-bottom: 14px;
+}
+
+.pos-shell .page-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .pos-shell .page-head p {
@@ -4512,6 +4792,7 @@ button {
   .pos-shell .report-chart-layout,
   .pos-shell .detail-report-layout,
   .pos-shell .printer-manager-layout,
+  .pos-shell .table-setup-layout,
   .pos-shell .customer-workspace,
   .pos-shell .profile-layout,
   .pos-shell .about-layout,

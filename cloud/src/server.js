@@ -15,6 +15,7 @@ const CLIENT_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 const STAFF_DIRECTORY_KEY = 'pos-staff-user-directory';
 const STAFF_PIN_RESET_KEY = 'pos-staff-pin-reset-commands';
 const MAIN_APP_DEVICE_NAME = 'Main App';
+const MAX_UPDATE_UPLOAD_BYTES = Number(process.env.GI_MAX_UPDATE_UPLOAD_BYTES || 350 * 1024 * 1024);
 const pool = createPool();
 
 const server = http.createServer(async (request, response) => {
@@ -123,6 +124,18 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/api/v1/admin/restaurants') {
       requireAdmin(request);
       await handleAdminRestaurants(response);
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/v1/admin/updates/windows') {
+      requireAdmin(request);
+      await handleAdminUpdateStatus(response);
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/v1/admin/updates/windows') {
+      requireAdmin(request);
+      await handleAdminUpdateUpload(request, response);
       return;
     }
 
@@ -950,6 +963,106 @@ async function handleAdminDeviceStatus(request, response, deviceId) {
   sendJson(response, 200, { ok: true, device: result.rows[0] });
 }
 
+async function handleAdminUpdateStatus(response) {
+  sendJson(response, 200, { ok: true, updateDir: UPDATE_DIR, ...getUpdateStatusPayload() });
+}
+
+async function handleAdminUpdateUpload(request, response) {
+  const form = await readMultipartFormData(request, MAX_UPDATE_UPLOAD_BYTES);
+  const latestFile = getUploadedFile(form.files, 'latestYml');
+  const setupFile = getUploadedFile(form.files, 'setupExe');
+  const blockmapFile = getUploadedFile(form.files, 'setupBlockmap');
+
+  if (!latestFile || !setupFile || !blockmapFile) {
+    sendJson(response, 400, {
+      ok: false,
+      error: 'Select latest.yml, setup .exe, and setup .exe.blockmap before uploading.',
+    });
+    return;
+  }
+
+  const latestName = 'latest.yml';
+  const setupName = sanitizeUpdateFileName(setupFile.filename);
+  const blockmapName = sanitizeUpdateFileName(blockmapFile.filename);
+
+  if (!/\.ya?ml$/i.test(latestFile.filename) && latestFile.filename !== latestName) {
+    sendJson(response, 400, { ok: false, error: 'Version file must be latest.yml.' });
+    return;
+  }
+
+  if (!/\.exe$/i.test(setupName) || !/setup/i.test(setupName)) {
+    sendJson(response, 400, { ok: false, error: 'Setup file must be a Windows Setup .exe file.' });
+    return;
+  }
+
+  if (!/\.exe\.blockmap$/i.test(blockmapName)) {
+    sendJson(response, 400, { ok: false, error: 'Blockmap file must end with .exe.blockmap.' });
+    return;
+  }
+
+  if (blockmapName !== `${setupName}.blockmap`) {
+    sendJson(response, 400, {
+      ok: false,
+      error: `Blockmap filename must match the setup file: ${setupName}.blockmap`,
+    });
+    return;
+  }
+
+  const latestContent = latestFile.data.toString('utf8');
+  const manifestSetupName = getSetupFileNameFromLatestContent(latestContent);
+
+  if (!manifestSetupName) {
+    sendJson(response, 400, { ok: false, error: 'latest.yml must contain the setup exe path or url.' });
+    return;
+  }
+
+  if (manifestSetupName !== setupName) {
+    sendJson(response, 400, {
+      ok: false,
+      error: `latest.yml points to ${manifestSetupName}, but selected setup file is ${setupName}.`,
+    });
+    return;
+  }
+
+  fs.mkdirSync(UPDATE_DIR, { recursive: true });
+
+  const uploads = [
+    { name: latestName, data: latestFile.data },
+    { name: setupName, data: setupFile.data },
+    { name: blockmapName, data: blockmapFile.data },
+  ];
+  const tempFiles = uploads.map((file) => ({
+    ...file,
+    tempPath: path.join(UPDATE_DIR, `${file.name}.upload-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.tmp`),
+    finalPath: path.join(UPDATE_DIR, file.name),
+  }));
+
+  try {
+    for (const file of tempFiles) {
+      fs.writeFileSync(file.tempPath, file.data);
+    }
+
+    for (const file of tempFiles) {
+      fs.renameSync(file.tempPath, file.finalPath);
+    }
+
+    cleanupOldUpdateFiles(new Set(uploads.map((file) => file.name)));
+  } finally {
+    for (const file of tempFiles) {
+      if (fs.existsSync(file.tempPath)) {
+        fs.rmSync(file.tempPath, { force: true });
+      }
+    }
+  }
+
+  sendJson(response, 200, {
+    ok: true,
+    message: 'Windows app update files uploaded successfully.',
+    updateDir: UPDATE_DIR,
+    ...getUpdateStatusPayload(),
+  });
+}
+
 async function handleDevicePair(request, response) {
   const body = await readJson(request);
   const code = String(body.code || '').replace(/\D/g, '');
@@ -1503,6 +1616,103 @@ function readJson(request) {
   });
 }
 
+function readRequestBuffer(request, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    let rejected = false;
+
+    request.on('data', (chunk) => {
+      total += chunk.length;
+      if (total > maxBytes) {
+        rejected = true;
+        const error = new Error(`Request body too large. Maximum upload size is ${formatBytes(maxBytes)}.`);
+        error.statusCode = 413;
+        reject(error);
+        request.destroy();
+        return;
+      }
+
+      chunks.push(chunk);
+    });
+    request.on('end', () => {
+      if (!rejected) {
+        resolve(Buffer.concat(chunks, total));
+      }
+    });
+    request.on('error', reject);
+  });
+}
+
+async function readMultipartFormData(request, maxBytes) {
+  const contentType = String(request.headers['content-type'] || '');
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  const boundary = boundaryMatch?.[1] || boundaryMatch?.[2];
+
+  if (!boundary) {
+    const error = new Error('Multipart boundary is missing');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const buffer = await readRequestBuffer(request, maxBytes);
+  return parseMultipartBuffer(buffer, boundary);
+}
+
+function parseMultipartBuffer(buffer, boundary) {
+  const delimiter = Buffer.from(`--${boundary}`);
+  const headerSeparator = Buffer.from('\r\n\r\n');
+  const fields = {};
+  const files = [];
+  let cursor = 0;
+
+  while (cursor < buffer.length) {
+    const delimiterStart = buffer.indexOf(delimiter, cursor);
+    if (delimiterStart === -1) {
+      break;
+    }
+
+    let partStart = delimiterStart + delimiter.length;
+    if (buffer[partStart] === 45 && buffer[partStart + 1] === 45) {
+      break;
+    }
+
+    if (buffer[partStart] === 13 && buffer[partStart + 1] === 10) {
+      partStart += 2;
+    }
+
+    const nextDelimiterStart = buffer.indexOf(delimiter, partStart);
+    if (nextDelimiterStart === -1) {
+      break;
+    }
+
+    let partEnd = nextDelimiterStart;
+    if (buffer[partEnd - 2] === 13 && buffer[partEnd - 1] === 10) {
+      partEnd -= 2;
+    }
+
+    const part = buffer.subarray(partStart, partEnd);
+    const headerEnd = part.indexOf(headerSeparator);
+    if (headerEnd !== -1) {
+      const headers = part.subarray(0, headerEnd).toString('utf8');
+      const data = part.subarray(headerEnd + headerSeparator.length);
+      const disposition = headers.match(/^content-disposition:\s*(.+)$/im)?.[1] || '';
+      const name = disposition.match(/name="([^"]+)"/i)?.[1] || '';
+      const filename = disposition.match(/filename="([^"]*)"/i)?.[1] || '';
+
+      if (name && filename) {
+        files.push({ fieldName: name, filename: path.basename(filename), data });
+      } else if (name) {
+        fields[name] = data.toString('utf8');
+      }
+    }
+
+    cursor = nextDelimiterStart;
+  }
+
+  return { fields, files };
+}
+
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
     'access-control-allow-headers': 'content-type, x-admin-token, x-client-token, x-api-key, x-device-id, x-restaurant-id',
@@ -1607,9 +1817,7 @@ function getSetupFileFromLatestManifest(directory) {
   }
 
   const latestContent = fs.readFileSync(latestPath, 'utf8');
-  const pathMatch = latestContent.match(/^path:\s*['"]?(.+?)['"]?\s*$/m);
-  const urlMatch = latestContent.match(/^\s*-\s+url:\s*['"]?(.+?)['"]?\s*$/m);
-  const fileName = path.basename(String(pathMatch?.[1] || urlMatch?.[1] || '').trim());
+  const fileName = getSetupFileNameFromLatestContent(latestContent);
 
   if (!fileName || !/\.exe$/i.test(fileName) || !/setup/i.test(fileName)) {
     return null;
@@ -1622,6 +1830,108 @@ function getSetupFileFromLatestManifest(directory) {
   }
 
   return { name: fileName, path: filePath };
+}
+
+function getSetupFileNameFromLatestContent(latestContent) {
+  const pathMatch = latestContent.match(/^path:\s*['"]?(.+?)['"]?\s*$/m);
+  const urlMatch = latestContent.match(/^\s*-\s+url:\s*['"]?(.+?)['"]?\s*$/m);
+  const fileName = path.basename(String(pathMatch?.[1] || urlMatch?.[1] || '').trim());
+
+  return fileName || '';
+}
+
+function sanitizeUpdateFileName(fileName) {
+  const safeName = path.basename(String(fileName || '').trim());
+
+  if (!safeName || safeName !== String(fileName || '').trim()) {
+    return '';
+  }
+
+  return safeName;
+}
+
+function getUploadedFile(files, fieldName) {
+  const file = files.find((candidate) => candidate.fieldName === fieldName && candidate.filename && candidate.data?.length);
+  if (!file) {
+    return null;
+  }
+
+  return { ...file, filename: sanitizeUpdateFileName(file.filename) };
+}
+
+function getUpdateStatusPayload() {
+  const files = listUpdateFiles();
+  const setupFile = getSetupFileFromLatestManifest(UPDATE_DIR);
+  const latestFile = files.find((file) => file.name === 'latest.yml');
+  const blockmapFile = setupFile
+    ? files.find((file) => file.name === `${setupFile.name}.blockmap`)
+    : files.find((file) => /\.exe\.blockmap$/i.test(file.name));
+
+  return {
+    files,
+    latest: latestFile || null,
+    setup: setupFile ? files.find((file) => file.name === setupFile.name) || setupFile : null,
+    blockmap: blockmapFile || null,
+    ready: Boolean(latestFile && setupFile && blockmapFile),
+    version: latestFile ? getLatestVersionFromFile(latestFile.path) : '',
+  };
+}
+
+function listUpdateFiles() {
+  if (!fs.existsSync(UPDATE_DIR)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(UPDATE_DIR)
+    .filter((fileName) => fileName === 'latest.yml' || /\.exe$/i.test(fileName) || /\.exe\.blockmap$/i.test(fileName))
+    .map((fileName) => {
+      const filePath = path.join(UPDATE_DIR, fileName);
+      const stat = fs.statSync(filePath);
+      return {
+        name: fileName,
+        path: filePath,
+        size: stat.size,
+        sizeLabel: formatBytes(stat.size),
+        updatedAt: stat.mtime.toISOString(),
+      };
+    })
+    .filter((file) => fs.statSync(file.path).isFile())
+    .sort((first, second) => first.name.localeCompare(second.name));
+}
+
+function getLatestVersionFromFile(filePath) {
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    return String(content.match(/^version:\s*['"]?(.+?)['"]?\s*$/m)?.[1] || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function cleanupOldUpdateFiles(keepNames) {
+  if (!fs.existsSync(UPDATE_DIR)) {
+    return;
+  }
+
+  for (const fileName of fs.readdirSync(UPDATE_DIR)) {
+    if (!keepNames.has(fileName) && (fileName === 'latest.yml' || /\.exe$/i.test(fileName) || /\.exe\.blockmap$/i.test(fileName))) {
+      fs.rmSync(path.join(UPDATE_DIR, fileName), { force: true });
+    }
+  }
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value >= 1024 * 1024) {
+    return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  if (value >= 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+
+  return `${value} B`;
 }
 
 function getUpdateContentType(fileName) {
@@ -1667,6 +1977,10 @@ const BASE_STYLES = `
   .status { padding: 12px 14px; border-radius: 7px; background: #f4f7fb; border: 1px solid #dbe3ee; color: #334155; font-weight: 800; }
   .status.ok { background: #ecfdf3; border-color: #b9efcd; color: #126b36; }
   .status.error { background: #fff1f2; border-color: #fecdd3; color: #a30f2f; }
+  .file-list { display: grid; gap: 8px; }
+  .file-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 10px; border: 1px solid #dbe3ee; border-radius: 7px; background: #f8fafc; }
+  .file-row strong, .file-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-row span, small { color: #64748b; font-weight: 800; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { padding: 11px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; }
   th { color: #475569; font-size: 11px; text-transform: uppercase; }
@@ -2213,6 +2527,23 @@ const ADMIN_HTML = `<!doctype html>
         <div class="status good">Normal connection uses cloud login. Transfer code is only for moving the same counter to another PC.</div>
       </section>
       <section class="card panel">
+        <h2>Windows App Update</h2>
+        <p>Upload the three files from the desktop build release folder. The server replaces the active update only after all files pass validation.</p>
+        <div class="grid">
+          <label>latest.yml <input id="latestYmlFile" type="file" accept=".yml,.yaml"></label>
+          <label>Setup EXE <input id="setupExeFile" type="file" accept=".exe"></label>
+          <label>EXE Blockmap <input id="setupBlockmapFile" type="file" accept=".blockmap"></label>
+        </div>
+        <div class="row">
+          <button class="primary" id="uploadUpdateBtn">Upload Update</button>
+          <button id="refreshUpdateBtn">Refresh Update Info</button>
+          <a class="button" href="/download/windows">Download Current Setup</a>
+          <a class="button" href="/updates/win/latest.yml" target="_blank" rel="noreferrer">Open latest.yml</a>
+        </div>
+        <div class="status" id="updateStatus">Load update info to see current files.</div>
+        <div class="file-list" id="updateFiles"></div>
+      </section>
+      <section class="card panel">
         <h2>Restaurants</h2>
         <div style="overflow:auto">
           <table>
@@ -2236,6 +2567,8 @@ const ADMIN_HTML = `<!doctype html>
     const tokenInput = document.getElementById('adminToken');
     const rowsEl = document.getElementById('restaurantRows');
     const statusEl = document.getElementById('status');
+    const updateStatusEl = document.getElementById('updateStatus');
+    const updateFilesEl = document.getElementById('updateFiles');
     tokenInput.value = localStorage.getItem('giAdminToken') || '';
 
     const tomorrow = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
@@ -2250,6 +2583,13 @@ const ADMIN_HTML = `<!doctype html>
       statusEl.className = 'status ' + (kind || '');
       statusEl.textContent = text;
     }
+    function setUpdateStatus(text, kind) {
+      updateStatusEl.className = 'status ' + (kind || '');
+      updateStatusEl.textContent = text;
+    }
+    function formatDate(value) {
+      return value ? new Date(value).toLocaleString() : '';
+    }
     async function api(path, options) {
       const headers = Object.assign(
         { 'content-type': 'application/json', 'x-admin-token': tokenInput.value },
@@ -2260,9 +2600,65 @@ const ADMIN_HTML = `<!doctype html>
       if (!response.ok || result.ok === false) throw new Error(result.error || 'Request failed');
       return result;
     }
+    async function adminFetchJson(path, options) {
+      const response = await fetch(path, Object.assign({}, options || {}, {
+        headers: Object.assign({ 'x-admin-token': tokenInput.value }, (options && options.headers) || {})
+      }));
+      const result = await response.json().catch(function () { return {}; });
+      if (!response.ok || result.ok === false) throw new Error(result.error || 'Request failed');
+      return result;
+    }
     function subscriptionText(restaurant) {
       if (!restaurant.subscription_id) return 'No subscription';
       return restaurant.plan_name + ' / ' + restaurant.subscription_status + ' / ' + new Date(restaurant.expires_at).toLocaleDateString();
+    }
+    function renderUpdateInfo(result) {
+      const files = result.files || [];
+      const readyText = result.ready ? 'Ready' : 'Missing files';
+      const versionText = result.version ? ' / v' + result.version : '';
+      setUpdateStatus(
+        readyText + versionText + ' / ' + (result.updateDir || 'cloud/updates/win'),
+        result.ready ? 'ok' : ''
+      );
+      updateFilesEl.innerHTML = files.length
+        ? files.map(function (file) {
+            return '<div class="file-row">' +
+              '<div><strong>' + esc(file.name) + '</strong><br><span>' + esc(formatDate(file.updatedAt)) + '</span></div>' +
+              '<span>' + esc(file.sizeLabel || '') + '</span>' +
+            '</div>';
+          }).join('')
+        : '<div class="status">No update files uploaded yet.</div>';
+    }
+    async function loadUpdateInfo() {
+      setUpdateStatus('Loading update files...', '');
+      const result = await adminFetchJson('/api/v1/admin/updates/windows');
+      renderUpdateInfo(result);
+    }
+    async function uploadUpdate() {
+      const latest = document.getElementById('latestYmlFile').files[0];
+      const setup = document.getElementById('setupExeFile').files[0];
+      const blockmap = document.getElementById('setupBlockmapFile').files[0];
+
+      if (!latest || !setup || !blockmap) {
+        setUpdateStatus('Select latest.yml, setup .exe, and setup .exe.blockmap.', 'error');
+        return;
+      }
+
+      if (!confirm('Replace current Windows app update files?')) {
+        return;
+      }
+
+      const form = new FormData();
+      form.append('latestYml', latest);
+      form.append('setupExe', setup);
+      form.append('setupBlockmap', blockmap);
+      setUpdateStatus('Uploading update files. Please wait...', '');
+      const result = await adminFetchJson('/api/v1/admin/updates/windows', {
+        method: 'POST',
+        body: form
+      });
+      renderUpdateInfo(result);
+      setUpdateStatus(result.message || 'Update uploaded successfully.', 'ok');
     }
     function render(restaurants) {
       rowsEl.innerHTML = restaurants.map(function (restaurant) {
@@ -2298,6 +2694,7 @@ const ADMIN_HTML = `<!doctype html>
       const result = await api('/api/v1/admin/restaurants');
       render(result.restaurants || []);
       setStatus('Loaded ' + (result.restaurants || []).length + ' restaurant(s).', 'ok');
+      await loadUpdateInfo();
     }
     async function approve(id) {
       setStatus('Approving restaurant...', '');
@@ -2336,6 +2733,12 @@ const ADMIN_HTML = `<!doctype html>
     document.getElementById('saveTokenBtn').addEventListener('click', function () {
       localStorage.setItem('giAdminToken', tokenInput.value);
       setStatus('Token saved in this browser.', 'ok');
+    });
+    document.getElementById('refreshUpdateBtn').addEventListener('click', function () {
+      loadUpdateInfo().catch(function (error) { setUpdateStatus(error.message, 'error'); });
+    });
+    document.getElementById('uploadUpdateBtn').addEventListener('click', function () {
+      uploadUpdate().catch(function (error) { setUpdateStatus(error.message, 'error'); });
     });
   </script>
 </body>

@@ -53,6 +53,7 @@ type PartTenderMethod = 'upi' | 'card'
 type ThemeMode = 'light' | 'dark'
 type AppView = 'home' | 'pos' | 'reports' | 'profile' | 'sync' | 'users' | 'about'
 type ReportPeriodMode = 'custom' | 'monthly' | 'yearly'
+type DiscountMode = 'percent' | 'amount'
 type StaffPermission =
   | 'pos_access'
   | 'reports'
@@ -86,6 +87,12 @@ type Category = {
   priority?: number
 }
 
+type DiningTableGroup = {
+  id: string
+  label: string
+  tables: string[]
+}
+
 type MenuItem = {
   id: string
   name: string
@@ -102,7 +109,9 @@ type CartLine = {
   price: number
   qty: number
   taxRate: number
+  discountMode?: DiscountMode
   discountPercent?: number
+  discountAmount?: number
   description?: string
 }
 
@@ -113,11 +122,13 @@ type LineEditMode = 'discount' | 'price' | 'description'
 type SuccessAction = 'saved' | 'printed'
 type CustomerFilter = 'all' | 'due' | 'clear'
 type CustomerSort = 'recent' | 'name' | 'due'
+type SeatingMode = 'individual' | 'group'
 
 type LineEditor = {
   lineId: string
   mode: LineEditMode
   value: string
+  discountMode?: DiscountMode
 }
 
 type OrderTotals = {
@@ -143,10 +154,15 @@ type SavedOrder = {
   status: OrderStatus
   orderType: OrderType
   table: string
+  seatingMode: SeatingMode
+  tables: string[]
+  diningGroupName: string
   customerId?: string
   customer: string
   cart: CartLine[]
+  discountMode: DiscountMode
   discountPercent: number
+  discountAmount: number
   servicePercent: number
   paymentMethod: PaymentMethod
   paymentBreakdown: PaymentBreakdown
@@ -350,6 +366,38 @@ type AuditLogEntry = {
   createdAt: string
 }
 
+type ReportPrintRow = {
+  label: string
+  amount?: number
+  count?: number
+  total?: number
+}
+
+type ReportPrintPayload = {
+  settings: ReceiptPrinterSettings
+  report: {
+    title: string
+    periodLabel: string
+    generatedAt: string
+    business: {
+      name: string
+      branch: string
+      phone: string
+    }
+    salesTotal: number
+    paidCount: number
+    cashInHand: number
+    upiTotal: number
+    cardTotal: number
+    bankTotal: number
+    balanceTotal: number
+    discountTotal: number
+    openTotal: number
+    openCount: number
+    orderTypeRows: ReportPrintRow[]
+  }
+}
+
 const defaultCategories: Category[] = [
   { id: 'all', label: 'Menu' },
   { id: 'starters', label: 'Starters' },
@@ -430,10 +478,15 @@ const autoSyncIntervalMs = 60 * 1000
 const autoSyncStartupDelayMs = 5 * 1000
 
 const firstBillNumber = 1
-const tableList = Array.from({ length: 24 }, (_, index) => `T${index + 1}`)
+const defaultDiningTableGroups: DiningTableGroup[] = [
+  { id: 'main-hall', label: 'Main Hall', tables: Array.from({ length: 8 }, (_, index) => `T${index + 1}`) },
+  { id: 'family', label: 'Family', tables: Array.from({ length: 8 }, (_, index) => `T${index + 9}`) },
+  { id: 'ac-room', label: 'AC Room', tables: Array.from({ length: 4 }, (_, index) => `T${index + 17}`) },
+  { id: 'outdoor', label: 'Outdoor', tables: Array.from({ length: 4 }, (_, index) => `T${index + 21}`) },
+]
 const appName = 'GI POS Restaurant'
 const appOwner = 'GI'
-const appVersion = '1.1.19'
+const appVersion = '1.1.20'
 const appIconUrl = `${import.meta.env.BASE_URL}app_icon.ico`
 const companyName = 'GI Hostings'
 const companyWebsite = 'https://www.gihostings.com'
@@ -507,6 +560,9 @@ function App() {
   const [categoryList, setCategoryList] = useState<Category[]>(() =>
     normalizeCategories(loadStoredArray('pos-categories', defaultCategories)),
   )
+  const [diningTableGroups, setDiningTableGroups] = useState<DiningTableGroup[]>(() =>
+    normalizeDiningTableGroups(loadStoredArray('pos-dining-table-groups', defaultDiningTableGroups)),
+  )
   const [menuList, setMenuList] = useState<MenuItem[]>(() => loadStoredArray('pos-menu-items', defaultMenuItems))
   const [savedOrders, setSavedOrders] = useState<SavedOrder[]>(() =>
     loadStoredArray<SavedOrder>('pos-orders', []).map(normalizeSavedOrderPayment),
@@ -536,13 +592,18 @@ function App() {
   const [cart, setCart] = useState<CartLine[]>(initialCart)
   const [selectedCustomerId, setSelectedCustomerId] = useState('')
   const [table, setTable] = useState('')
+  const [seatingMode, setSeatingMode] = useState<SeatingMode>('individual')
+  const [selectedTables, setSelectedTables] = useState<string[]>([])
+  const [diningGroupName, setDiningGroupName] = useState('')
   const [customer, setCustomer] = useState('')
   const [customerSearch, setCustomerSearch] = useState('')
   const [customerFilter, setCustomerFilter] = useState<CustomerFilter>('all')
   const [customerSort, setCustomerSort] = useState<CustomerSort>('recent')
   const [customerPhone, setCustomerPhone] = useState('')
   const [customerAddress, setCustomerAddress] = useState('')
+  const [discountMode, setDiscountMode] = useState<DiscountMode>('percent')
   const [discountPercent, setDiscountPercent] = useState(0)
+  const [discountAmount, setDiscountAmount] = useState(0)
   const [servicePercent, setServicePercent] = useState(0)
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash')
   const [amountReceivedOverride, setAmountReceivedOverride] = useState<number | null>(null)
@@ -552,6 +613,11 @@ function App() {
   const [menuEditorOpen, setMenuEditorOpen] = useState(false)
   const [displaySettingsOpen, setDisplaySettingsOpen] = useState(false)
   const [tableSelectorOpen, setTableSelectorOpen] = useState(false)
+  const [tableSetupOpen, setTableSetupOpen] = useState(false)
+  const [activeTableGroupId, setActiveTableGroupId] = useState(defaultDiningTableGroups[0]?.id ?? '')
+  const [editingTableGroupId, setEditingTableGroupId] = useState<string | null>(null)
+  const [tableGroupName, setTableGroupName] = useState('')
+  const [tableGroupTables, setTableGroupTables] = useState('')
   const [customerEditorOpen, setCustomerEditorOpen] = useState(false)
   const [discountEditorOpen, setDiscountEditorOpen] = useState(false)
   const [orderListMode, setOrderListMode] = useState<OrderListMode | null>(null)
@@ -686,13 +752,19 @@ function App() {
   const tableStatus = useMemo(() => {
     const status = new Map<string, SavedOrder>()
     openOrders.forEach((order) => {
-      if (order.orderType === 'Dining' && order.table) {
-        status.set(order.table, order)
+      if (order.orderType === 'Dining') {
+        getSavedOrderTables(order).forEach((tableNo) => status.set(tableNo, order))
       }
     })
 
     return status
   }, [openOrders])
+  const tableList = useMemo(() => diningTableGroups.flatMap((group) => group.tables), [diningTableGroups])
+  const activeTableGroup = useMemo(
+    () => diningTableGroups.find((group) => group.id === activeTableGroupId) ?? diningTableGroups[0],
+    [activeTableGroupId, diningTableGroups],
+  )
+  const visibleTableList = activeTableGroup?.tables ?? tableList
 
   const selectedOrderListDay = useMemo(() => parseDateInputValue(orderListDate, new Date()), [orderListDate])
 
@@ -768,6 +840,14 @@ function App() {
   const selectedCustomerProfile = useMemo(
     () => customers.find((profile) => profile.id === selectedCustomerId),
     [customers, selectedCustomerId],
+  )
+  const selectedTableSetupGroup = useMemo(
+    () => (editingTableGroupId ? (diningTableGroups.find((group) => group.id === editingTableGroupId) ?? null) : null),
+    [diningTableGroups, editingTableGroupId],
+  )
+  const activeLineEditorLine = useMemo(
+    () => (lineEditor ? (cart.find((line) => line.id === lineEditor.lineId) ?? null) : null),
+    [cart, lineEditor],
   )
   const activeStaffUsers = useMemo(() => staffUsers.filter((staffUser) => staffUser.active), [staffUsers])
   const selectedSetupRestaurant = useMemo(
@@ -848,14 +928,14 @@ function App() {
 
   const baseTotals = useMemo(() => {
     const subtotal = cart.reduce((sum, line) => sum + lineTotal(line), 0)
-    const discount = roundMoney((subtotal * discountPercent) / 100)
+    const discount = getDiscountValue(subtotal, discountMode, discountPercent, discountAmount)
     const taxable = subtotal - discount
     const tax = roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * line.taxRate) / 100, 0))
     const serviceCharge = roundMoney((taxable * servicePercent) / 100)
     const total = roundMoney(Math.max(0, taxable + tax + serviceCharge))
 
     return { subtotal, discount, tax, serviceCharge, total }
-  }, [cart, discountPercent, servicePercent])
+  }, [cart, discountAmount, discountMode, discountPercent, servicePercent])
 
   const cashReceived =
     paymentMethod === 'Cash' || paymentMethod === 'Part'
@@ -912,6 +992,18 @@ function App() {
   }, [staffUsers])
 
   useEffect(() => {
+    if (!diningTableGroups.some((group) => group.id === activeTableGroupId)) {
+      setActiveTableGroupId(diningTableGroups[0]?.id ?? '')
+    }
+
+    if (editingTableGroupId && !diningTableGroups.some((group) => group.id === editingTableGroupId)) {
+      setEditingTableGroupId(null)
+      setTableGroupName('')
+      setTableGroupTables('')
+    }
+  }, [activeTableGroupId, diningTableGroups, editingTableGroupId])
+
+  useEffect(() => {
     let cancelled = false
 
     if (!window.posDb) {
@@ -927,6 +1019,13 @@ function App() {
 
         const loadedCategories = normalizeCategories(
           readDbValue(snapshot, 'pos-categories', loadStoredArray('pos-categories', defaultCategories)),
+        )
+        const loadedDiningTableGroups = normalizeDiningTableGroups(
+          readDbValue(
+            snapshot,
+            'pos-dining-table-groups',
+            loadStoredArray('pos-dining-table-groups', defaultDiningTableGroups),
+          ),
         )
         const loadedMenuItems = readDbValue(snapshot, 'pos-menu-items', loadStoredArray('pos-menu-items', defaultMenuItems))
         const loadedOrders = readDbValue<SavedOrder[]>(snapshot, 'pos-orders', loadStoredArray('pos-orders', [])).map(
@@ -978,6 +1077,8 @@ function App() {
         const loadedTheme = readDbValue(snapshot, 'pos-theme', localStorage.getItem('pos-theme') || 'light')
 
         setCategoryList(loadedCategories)
+        setDiningTableGroups(loadedDiningTableGroups)
+        setActiveTableGroupId(loadedDiningTableGroups[0]?.id ?? '')
         setMenuList(loadedMenuItems)
         setSavedOrders(loadedOrders)
         setCustomers(loadedCustomers)
@@ -1033,6 +1134,10 @@ function App() {
   useEffect(() => {
     persistStoredValue('pos-categories', categoryList, storageReady && !skipPersistenceRef.current)
   }, [categoryList, storageReady])
+
+  useEffect(() => {
+    persistStoredValue('pos-dining-table-groups', diningTableGroups, storageReady && !skipPersistenceRef.current)
+  }, [diningTableGroups, storageReady])
 
   useEffect(() => {
     persistStoredValue('pos-menu-items', menuList, storageReady && !skipPersistenceRef.current)
@@ -2363,6 +2468,17 @@ function App() {
         case 'pos-categories':
           setCategoryList(normalizeCategories(Array.isArray(change.value) ? (change.value as Category[]) : defaultCategories))
           break
+        case 'pos-dining-table-groups':
+          {
+            const nextGroups = normalizeDiningTableGroups(
+              Array.isArray(change.value) ? (change.value as DiningTableGroup[]) : defaultDiningTableGroups,
+            )
+            setDiningTableGroups(nextGroups)
+            setActiveTableGroupId((groupId) =>
+              nextGroups.some((group) => group.id === groupId) ? groupId : (nextGroups[0]?.id ?? ''),
+            )
+          }
+          break
         case 'pos-customers':
           setCustomers(Array.isArray(change.value) ? (change.value as CustomerProfile[]) : [])
           break
@@ -2445,6 +2561,17 @@ function App() {
     }))
   }
 
+  function openTableSetup() {
+    if (!requirePermission('menu_manage', 'Table setup permission required')) {
+      return
+    }
+
+    setTableSetupOpen(true)
+    if (!selectedTableSetupGroup && diningTableGroups[0]) {
+      editTableGroup(diningTableGroups[0])
+    }
+  }
+
   function openPrinterManager() {
     if (!requirePermission('printer_manage', 'Printer manage permission required')) {
       return
@@ -2452,6 +2579,84 @@ function App() {
 
     setPrinterOpen(true)
     refreshPrinters()
+  }
+
+  function editTableGroup(group: DiningTableGroup) {
+    setEditingTableGroupId(group.id)
+    setTableGroupName(group.label)
+    setTableGroupTables(group.tables.join(', '))
+  }
+
+  function newTableGroupDraft() {
+    setEditingTableGroupId(null)
+    setTableGroupName('')
+    setTableGroupTables('')
+  }
+
+  function saveTableGroup() {
+    const label = tableGroupName.trim()
+    const tables = parseDiningTableNames(tableGroupTables)
+
+    if (!label) {
+      setPrinterStatus('Enter table area name')
+      return
+    }
+
+    if (!tables.length) {
+      setPrinterStatus('Enter at least one table')
+      return
+    }
+
+    const duplicateTable = tables.find((tableName) =>
+      diningTableGroups.some((group) => group.id !== editingTableGroupId && group.tables.includes(tableName)),
+    )
+
+    if (duplicateTable) {
+      setPrinterStatus(`${duplicateTable} already exists in another area`)
+      return
+    }
+
+    if (editingTableGroupId) {
+      setDiningTableGroups((groups) =>
+        normalizeDiningTableGroups(
+          groups.map((group) => (group.id === editingTableGroupId ? { ...group, label, tables } : group)),
+        ),
+      )
+      setPrinterStatus(`${label} updated`)
+      return
+    }
+
+    const newGroup: DiningTableGroup = {
+      id: createDiningTableGroupId(label),
+      label,
+      tables,
+    }
+    setDiningTableGroups((groups) => normalizeDiningTableGroups([...groups, newGroup]))
+    setEditingTableGroupId(newGroup.id)
+    setActiveTableGroupId(newGroup.id)
+    setPrinterStatus(`${label} added`)
+  }
+
+  function deleteTableGroup(groupId: string) {
+    const group = diningTableGroups.find((savedGroup) => savedGroup.id === groupId)
+    if (!group) {
+      return
+    }
+
+    if (diningTableGroups.length <= 1) {
+      setPrinterStatus('At least one table area is required')
+      return
+    }
+
+    if (!window.confirm(`Delete ${group.label}?`)) {
+      return
+    }
+
+    const nextGroups = diningTableGroups.filter((savedGroup) => savedGroup.id !== groupId)
+    setDiningTableGroups(normalizeDiningTableGroups(nextGroups))
+    setActiveTableGroupId(nextGroups[0]?.id ?? '')
+    newTableGroupDraft()
+    setPrinterStatus(`${group.label} deleted`)
   }
 
   function handleLogoUpload(file?: File) {
@@ -2509,7 +2714,9 @@ function App() {
           price: item.price,
           qty: 1,
           taxRate: 0,
+          discountMode: 'percent',
           discountPercent: 0,
+          discountAmount: 0,
           description: '',
         },
       ]
@@ -2545,13 +2752,13 @@ function App() {
 
     const value =
       mode === 'discount'
-        ? String(line.discountPercent ?? 0)
+        ? String(line.discountMode === 'amount' ? (line.discountAmount ?? 0) : (line.discountPercent ?? 0))
         : mode === 'price'
           ? String(line.price)
           : (line.description ?? '')
 
     setLineActionId(null)
-    setLineEditor({ lineId: line.id, mode, value })
+    setLineEditor({ lineId: line.id, mode, value, discountMode: line.discountMode ?? 'percent' })
   }
 
   function saveLineEditor() {
@@ -2570,7 +2777,14 @@ function App() {
         }
 
         if (lineEditor.mode === 'discount') {
-          return { ...line, discountPercent: clamp(numberFromInput(lineEditor.value), 0, 100) }
+          const mode = lineEditor.discountMode ?? 'percent'
+          const gross = Number(line.qty || 0) * Number(line.price || 0)
+          return {
+            ...line,
+            discountMode: mode,
+            discountPercent: mode === 'percent' ? clamp(numberFromInput(lineEditor.value), 0, 100) : 0,
+            discountAmount: mode === 'amount' ? clamp(numberFromInput(lineEditor.value), 0, gross) : 0,
+          }
         }
 
         if (lineEditor.mode === 'price') {
@@ -2604,13 +2818,18 @@ function App() {
 
   function startBlankOrder(advanceBill = true) {
     setCart([])
+    setDiscountMode('percent')
     setDiscountPercent(0)
+    setDiscountAmount(0)
     setServicePercent(0)
     setSelectedCustomerId('')
     setCustomer('')
     setCustomerPhone('')
     setCustomerAddress('')
     setTable('')
+    setSeatingMode('individual')
+    setSelectedTables([])
+    setDiningGroupName('')
     setPaymentMethod('Cash')
     setAmountReceivedOverride(null)
     setPartTenderMethod('upi')
@@ -2626,16 +2845,23 @@ function App() {
     const existingOrder = savedOrders.find((order) => order.id === activeOrderId)
     const savedCustomerId = creditCustomer?.id ?? selectedCustomerId
     const savedCustomerName = creditCustomer?.name ?? customer
+    const savedTables = getCurrentDiningTables(seatingMode, table, selectedTables)
+    const savedTableLabel = getSeatingDisplayLabel(seatingMode, table, savedTables, diningGroupName)
     const order: SavedOrder = {
       id: activeOrderId,
       billNo: String(billNumber),
       status,
       orderType,
-      table,
+      table: savedTableLabel,
+      seatingMode,
+      tables: savedTables,
+      diningGroupName: seatingMode === 'group' ? diningGroupName.trim() : '',
       customerId: savedCustomerId || undefined,
       customer: savedCustomerName,
       cart,
+      discountMode,
       discountPercent,
+      discountAmount,
       servicePercent,
       paymentMethod,
       paymentBreakdown,
@@ -2703,13 +2929,19 @@ function App() {
     setBillNumber(Number(order.billNo) || billNumber)
     setOrderType(order.orderType)
     setTable(order.table)
+    setSeatingMode(order.seatingMode ?? 'individual')
+    setSelectedTables(getSavedOrderTables(order))
+    setDiningGroupName(order.diningGroupName ?? '')
     setSelectedCustomerId(order.customerId ?? '')
     setCustomer(order.customer)
+    setActiveTableGroupId(getTableGroupId(getSavedOrderTables(order)[0] ?? order.table, diningTableGroups))
     const savedCustomer = customers.find((profile) => profile.id === order.customerId)
     setCustomerPhone(savedCustomer?.phone ?? '')
     setCustomerAddress(savedCustomer?.address ?? '')
     setCart(order.cart)
+    setDiscountMode(order.discountMode ?? 'percent')
     setDiscountPercent(order.discountPercent)
+    setDiscountAmount(order.discountAmount ?? 0)
     setServicePercent(order.servicePercent)
     setPaymentMethod(order.paymentMethod)
     setAmountReceivedOverride(order.paymentBreakdown?.cash ?? order.amountReceived)
@@ -2724,8 +2956,15 @@ function App() {
       return
     }
 
+    const order = savedOrders.find((savedOrder) => savedOrder.id === orderId)
+    const label = order ? `Bill #${order.billNo} (${order.orderType}${order.table ? ` / ${order.table}` : ''})` : 'this order'
+
+    if (!window.confirm(`Delete ${label}? This cannot be undone.`)) {
+      return
+    }
+
     setSavedOrders((orders) => orders.filter((order) => order.id !== orderId))
-    recordAudit('order_deleted', `Order ${orderId} deleted`)
+    recordAudit('order_deleted', `${label} deleted`)
   }
 
   function selectTable(tableNo: string) {
@@ -2741,13 +2980,51 @@ function App() {
     }
 
     setOrderType('Dining')
+    setSeatingMode('individual')
     setTable(tableNo)
+    setSelectedTables([tableNo])
+    setDiningGroupName('')
+    setActiveTableGroupId(getTableGroupId(tableNo, diningTableGroups))
     setTableSelectorOpen(false)
     setPrinterStatus(`${tableNo} selected`)
   }
 
+  function toggleGroupTable(tableNo: string) {
+    const tableOrder = tableStatus.get(tableNo)
+    if (tableOrder && tableOrder.id !== activeOrderId) {
+      setPrinterStatus(`${tableNo} already has bill ${tableOrder.billNo}`)
+      return
+    }
+
+    setSelectedTables((tables) =>
+      tables.includes(tableNo) ? tables.filter((savedTable) => savedTable !== tableNo) : [...tables, tableNo],
+    )
+  }
+
+  function saveGroupedTables() {
+    if (selectedTables.length < 2) {
+      setPrinterStatus('Select two or more tables for group dining')
+      return
+    }
+
+    const sortedTables = sortTablesByLayout(selectedTables, tableList)
+    const label = getSeatingDisplayLabel('group', table, sortedTables, diningGroupName)
+    setOrderType('Dining')
+    setSeatingMode('group')
+    setSelectedTables(sortedTables)
+    setTable(label)
+    setTableSelectorOpen(false)
+    setPrinterStatus(`${label} selected`)
+  }
+
   function ensureTableSelected() {
-    if (orderType === 'Dining' && !table) {
+    if (orderType === 'Dining' && seatingMode === 'group' && selectedTables.length < 2) {
+      setTableSelectorOpen(true)
+      setPrinterStatus('Select two or more tables for group dining')
+      return false
+    }
+
+    if (orderType === 'Dining' && !getSeatingDisplayLabel(seatingMode, table, selectedTables, diningGroupName)) {
       setTableSelectorOpen(true)
       setPrinterStatus('Select table before continuing')
       return false
@@ -3312,7 +3589,7 @@ function App() {
         logoDataUrl: businessProfile.logoDataUrl,
       },
       orderType,
-      table,
+      table: getSeatingDisplayLabel(seatingMode, table, selectedTables, diningGroupName),
       customer,
       cashier: 'Admin',
       paymentMethod,
@@ -3323,10 +3600,15 @@ function App() {
         price: line.price,
         total: lineTotal(line),
         description: line.description ?? '',
+        discountMode: line.discountMode ?? 'percent',
         discountPercent: line.discountPercent ?? 0,
+        discountAmount: line.discountAmount ?? 0,
       })),
       subtotal: totals.subtotal,
       discount: totals.discount,
+      discountMode,
+      discountPercent,
+      discountAmount,
       tax: totals.tax,
       serviceCharge: totals.serviceCharge,
       total: totals.total,
@@ -3342,7 +3624,7 @@ function App() {
       billNo: String(billNumber),
       station,
       orderType,
-      table,
+      table: getSeatingDisplayLabel(seatingMode, table, selectedTables, diningGroupName),
       customer,
       cashier: 'Admin',
       items: cart.map((line) => ({
@@ -3351,6 +3633,61 @@ function App() {
         description: line.description ?? '',
       })),
       createdAt: new Date().toISOString(),
+    }
+  }
+
+  function buildReportPrintPayload(reportData: ReturnType<typeof buildReport>, period: ReportPeriod, title: string): ReportPrintPayload {
+    return {
+      settings: billPrinterSettings,
+      report: {
+        title,
+        periodLabel: period.label,
+        generatedAt: new Date().toISOString(),
+        business: {
+          name: receiptBusinessName,
+          branch: businessProfile.branch.trim(),
+          phone: businessProfile.phone.trim(),
+        },
+        salesTotal: reportData.salesTotal,
+        paidCount: reportData.paidCount,
+        cashInHand: reportData.cashInHand,
+        upiTotal: reportData.upiTotal,
+        cardTotal: reportData.cardTotal,
+        bankTotal: reportData.bankTotal,
+        balanceTotal: reportData.balanceTotal,
+        discountTotal: reportData.discountTotal,
+        openTotal: reportData.openTotal,
+        openCount: reportData.openCount,
+        orderTypeRows: orderTypes.map((type) => ({
+          label: type,
+          count: reportData.orderTypeTotals[type].count,
+          total: reportData.orderTypeTotals[type].total,
+        })),
+      },
+    }
+  }
+
+  async function printTodayReport() {
+    if (!requirePermission('reports', 'Report permission required')) {
+      return
+    }
+
+    const todayPeriod = getTodayReportPeriod(new Date())
+    const todayReport = buildReport(savedOrders, todayPeriod)
+    const payload = buildReportPrintPayload(todayReport, todayPeriod, 'Today Sales Report')
+
+    try {
+      setPrinterStatus('Printing today report...')
+      if (window.posPrinter?.printReport) {
+        await window.posPrinter.printReport(payload)
+        setPrinterStatus('Today report sent to bill printer')
+        return
+      }
+
+      printReportInBrowser(payload)
+      setPrinterStatus('Today report opened for printing')
+    } catch (error) {
+      setPrinterStatus(getErrorMessage(error))
     }
   }
 
@@ -3851,6 +4188,13 @@ function App() {
               <span>Categories and items</span>
             </button>
             )}
+            {hasSubscriptionAccess && hasPermission('menu_manage') && (
+            <button className="home-launch-tile" type="button" onClick={openTableSetup}>
+              <UtensilsCrossed size={34} />
+              <strong>Table Setup</strong>
+              <span>Dining tables</span>
+            </button>
+            )}
             {hasSubscriptionAccess && hasPermission('printer_manage') && (
             <button className="home-launch-tile" type="button" onClick={openPrinterManager}>
               <Printer size={34} />
@@ -3877,10 +4221,16 @@ function App() {
               <h1>Detailed Report</h1>
               <p>{billingDisplayName} - {periodReport.periodLabel}</p>
             </div>
-            <button className="home-action primary" type="button" onClick={() => goToView('pos')}>
-              <ShoppingCart size={18} />
-              POS Sale
-            </button>
+            <div className="page-head-actions">
+              <button className="home-action" type="button" onClick={printTodayReport}>
+                <Printer size={18} />
+                Print Today's Report
+              </button>
+              <button className="home-action primary" type="button" onClick={() => goToView('pos')}>
+                <ShoppingCart size={18} />
+                POS Sale
+              </button>
+            </div>
           </div>
 
           <section className="report-control-panel">
@@ -4905,9 +5255,19 @@ function App() {
               <span>Bill#</span>
               <strong>{billNumber}</strong>
             </div>
-            <button type="button" className="icon-action" title="Seating" onClick={() => setTableSelectorOpen(true)}>
+            <button
+              type="button"
+              className="icon-action"
+              title="Seating"
+              onClick={() => {
+                if (table) {
+                  setActiveTableGroupId(getTableGroupId(selectedTables[0] ?? getDiningTablesFromLabel(table)[0] ?? table, diningTableGroups))
+                }
+                setTableSelectorOpen(true)
+              }}
+            >
               <UtensilsCrossed size={19} />
-              <span>{table || 'Seating'}</span>
+              <span>{getSeatingDisplayLabel(seatingMode, table, selectedTables, diningGroupName) || 'Seating'}</span>
             </button>
             <button type="button" className="icon-action" title="Customer" onClick={() => setCustomerEditorOpen(true)}>
               <User size={19} />
@@ -4924,7 +5284,7 @@ function App() {
               }}
             >
               <BadgePercent size={19} />
-              <span>{discountPercent ? `${discountPercent}%` : 'Discount'}</span>
+              <span>{getDiscountLabel(baseTotals.subtotal, discountMode, discountPercent, discountAmount)}</span>
             </button>
           </div>
 
@@ -5226,33 +5586,195 @@ function App() {
         </div>
       )}
 
+      {tableSetupOpen && (
+        <div className="modal-layer" role="dialog" aria-modal="true" aria-label="Table setup">
+          <div className="table-setup-panel">
+            <div className="panel-head">
+              <div>
+                <strong>Table Setup</strong>
+                <span>{diningTableGroups.length} area(s) / {tableList.length} table(s)</span>
+              </div>
+              <button type="button" onClick={() => setTableSetupOpen(false)} title="Close">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="table-setup-layout">
+              <section className="table-area-list">
+                <div className="printer-section-title">
+                  <strong>Dining Areas</strong>
+                  <span>{tableStatus.size} occupied</span>
+                </div>
+                <div className="table-area-buttons">
+                  {diningTableGroups.map((group) => (
+                    <button
+                      className={editingTableGroupId === group.id ? 'active' : ''}
+                      key={group.id}
+                      type="button"
+                      onClick={() => editTableGroup(group)}
+                    >
+                      <strong>{group.label}</strong>
+                      <span>{group.tables.length} table(s)</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="table-setup-actions">
+                  <button className="small-button" type="button" onClick={newTableGroupDraft}>
+                    <Plus size={16} />
+                    New Area
+                  </button>
+                </div>
+              </section>
+
+              <section className="table-area-editor">
+                <div className="printer-section-title">
+                  <strong>{editingTableGroupId ? 'Edit Area' : 'Add Area'}</strong>
+                  <span>{selectedTableSetupGroup?.label || 'New dining area'}</span>
+                </div>
+
+                <div className="dialog-grid single">
+                  <label className="dialog-field">
+                    Area Name
+                    <input
+                      placeholder="Main Hall"
+                      value={tableGroupName}
+                      onChange={(event) => setTableGroupName(event.target.value)}
+                    />
+                  </label>
+                  <label className="dialog-field">
+                    Tables
+                    <textarea
+                      placeholder="T1, T2, T3"
+                      value={tableGroupTables}
+                      onChange={(event) => setTableGroupTables(event.target.value)}
+                    />
+                  </label>
+                </div>
+
+                <div className="table-preview-grid">
+                  {parseDiningTableNames(tableGroupTables).map((tableName) => (
+                    <span key={tableName}>{tableName}</span>
+                  ))}
+                </div>
+
+                <div className="panel-actions">
+                  {editingTableGroupId && (
+                    <button className="small-button danger" type="button" onClick={() => deleteTableGroup(editingTableGroupId)}>
+                      <Trash2 size={16} />
+                      Delete
+                    </button>
+                  )}
+                  <button className="small-button primary" type="button" onClick={saveTableGroup}>
+                    <Save size={16} />
+                    Save Area
+                  </button>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
+
       {tableSelectorOpen && (
         <div className="modal-layer" role="dialog" aria-modal="true" aria-label="Table selection">
           <div className="table-panel">
             <div className="panel-head">
               <div>
                 <strong>Select Table</strong>
-                <span>Occupied tables open saved unclosed or hold orders</span>
+                <span>{seatingMode === 'group' ? 'Select two or more free tables for one group bill' : 'Occupied tables open saved unclosed or hold orders'}</span>
               </div>
               <button type="button" onClick={() => setTableSelectorOpen(false)} title="Close">
                 <X size={18} />
               </button>
             </div>
 
+            <div className="seating-mode-tabs" aria-label="Seating mode">
+              <button
+                className={seatingMode === 'individual' ? 'active' : ''}
+                type="button"
+                onClick={() => {
+                  setSeatingMode('individual')
+                  setDiningGroupName('')
+                }}
+              >
+                <User size={16} />
+                Individual
+              </button>
+              <button
+                className={seatingMode === 'group' ? 'active' : ''}
+                type="button"
+                onClick={() => {
+                  setSeatingMode('group')
+                  if (!selectedTables.length && table) {
+                    setSelectedTables(getDiningTablesFromLabel(table))
+                  }
+                }}
+              >
+                <UtensilsCrossed size={16} />
+                Group
+              </button>
+            </div>
+
+            {seatingMode === 'group' && (
+              <div className="group-seat-bar">
+                <label>
+                  Group Name
+                  <input
+                    placeholder="Family 1"
+                    value={diningGroupName}
+                    onChange={(event) => setDiningGroupName(event.target.value)}
+                  />
+                </label>
+                <div className="group-seat-summary">
+                  <span>{selectedTables.length} selected</span>
+                  <strong>{selectedTables.length ? sortTablesByLayout(selectedTables, tableList).join(', ') : 'No tables'}</strong>
+                </div>
+                <button className="small-button primary" type="button" onClick={saveGroupedTables}>
+                  <Save size={16} />
+                  Apply Group
+                </button>
+              </div>
+            )}
+
+            <div className="table-group-tabs" aria-label="Table groups">
+              {diningTableGroups.map((group) => {
+                const occupiedCount = group.tables.filter((tableNo) => tableStatus.has(tableNo)).length
+                return (
+                  <button
+                    className={activeTableGroupId === group.id ? 'active' : ''}
+                    key={group.id}
+                    type="button"
+                    onClick={() => setActiveTableGroupId(group.id)}
+                  >
+                    <strong>{group.label}</strong>
+                    <span>
+                      {occupiedCount}/{group.tables.length} busy
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+
             <div className="table-grid">
-              {tableList.map((tableNo) => {
+              {visibleTableList.map((tableNo) => {
                 const savedOrder = tableStatus.get(tableNo)
                 const isSelected = table === tableNo
+                const isGroupSelected = seatingMode === 'group' && selectedTables.includes(tableNo)
                 const className = [
                   'table-tile',
-                  isSelected ? 'active' : '',
+                  isSelected || isGroupSelected ? 'active' : '',
                   savedOrder ? savedOrder.status : '',
                 ]
                   .filter(Boolean)
                   .join(' ')
 
                 return (
-                  <button className={className} key={tableNo} type="button" onClick={() => selectTable(tableNo)}>
+                  <button
+                    className={className}
+                    key={tableNo}
+                    type="button"
+                    onClick={() => (seatingMode === 'group' ? toggleGroupTable(tableNo) : selectTable(tableNo))}
+                  >
                     <strong>{tableNo}</strong>
                     <span>{savedOrder ? `${savedOrder.status} - ${money(savedOrder.totals.total)}` : 'Free'}</span>
                   </button>
@@ -5473,18 +5995,52 @@ function App() {
               </button>
             </div>
 
+            <div className="discount-mode-tabs" aria-label="Discount type">
+              <button
+                className={discountMode === 'percent' ? 'active' : ''}
+                type="button"
+                onClick={() => setDiscountMode('percent')}
+              >
+                <BadgePercent size={16} />
+                Percent
+              </button>
+              <button
+                className={discountMode === 'amount' ? 'active' : ''}
+                type="button"
+                onClick={() => setDiscountMode('amount')}
+              >
+                <Banknote size={16} />
+                Amount
+              </button>
+            </div>
+
             <div className="dialog-grid single">
               <label className="dialog-field">
-                Discount %
+                {discountMode === 'percent' ? 'Discount %' : 'Discount Amount'}
                 <input
                   autoFocus
                   type="number"
                   min="0"
-                  max="100"
-                  value={discountPercent}
-                  onChange={(event) => setDiscountPercent(clamp(numberFromInput(event.target.value), 0, 100))}
+                  max={discountMode === 'percent' ? '100' : undefined}
+                  value={discountMode === 'percent' ? discountPercent : discountAmount}
+                  onChange={(event) => {
+                    const value = numberFromInput(event.target.value)
+                    if (discountMode === 'percent') {
+                      setDiscountPercent(clamp(value, 0, 100))
+                      return
+                    }
+
+                    setDiscountAmount(clamp(value, 0, baseTotals.subtotal))
+                  }}
                 />
               </label>
+            </div>
+
+            <div className="discount-preview">
+              <span>Subtotal</span>
+              <strong>{money(baseTotals.subtotal)}</strong>
+              <span>Discount</span>
+              <strong>{money(baseTotals.discount)}</strong>
             </div>
 
             <div className="panel-actions">
@@ -5492,7 +6048,9 @@ function App() {
                 className="small-button"
                 type="button"
                 onClick={() => {
+                  setDiscountMode('percent')
                   setDiscountPercent(0)
+                  setDiscountAmount(0)
                   setServicePercent(0)
                 }}
               >
@@ -5514,15 +6072,50 @@ function App() {
             <div className="panel-head">
               <div>
                 <strong>{getLineEditorTitle(lineEditor.mode)}</strong>
-                <span>{cart.find((line) => line.id === lineEditor.lineId)?.name}</span>
+                <span>{activeLineEditorLine?.name}</span>
               </div>
               <button type="button" onClick={() => setLineEditor(null)} title="Close">
                 <X size={18} />
               </button>
             </div>
 
+            {lineEditor.mode === 'discount' && (
+              <div className="discount-mode-tabs" aria-label="Item discount type">
+                <button
+                  className={(lineEditor.discountMode ?? 'percent') === 'percent' ? 'active' : ''}
+                  type="button"
+                  onClick={() =>
+                    setLineEditor({
+                      ...lineEditor,
+                      discountMode: 'percent',
+                      value: String(activeLineEditorLine?.discountPercent ?? 0),
+                    })
+                  }
+                >
+                  <BadgePercent size={16} />
+                  Percent
+                </button>
+                <button
+                  className={lineEditor.discountMode === 'amount' ? 'active' : ''}
+                  type="button"
+                  onClick={() =>
+                    setLineEditor({
+                      ...lineEditor,
+                      discountMode: 'amount',
+                      value: String(activeLineEditorLine?.discountAmount ?? 0),
+                    })
+                  }
+                >
+                  <Banknote size={16} />
+                  Amount
+                </button>
+              </div>
+            )}
+
             <label className="dialog-field">
-              {getLineEditorLabel(lineEditor.mode)}
+              {lineEditor.mode === 'discount' && lineEditor.discountMode === 'amount'
+                ? 'Discount Amount'
+                : getLineEditorLabel(lineEditor.mode)}
               {lineEditor.mode === 'description' ? (
                 <textarea
                   autoFocus
@@ -5536,7 +6129,11 @@ function App() {
                   autoFocus
                   type="number"
                   min="0"
-                  max={lineEditor.mode === 'discount' ? '100' : undefined}
+                  max={
+                    lineEditor.mode === 'discount' && (lineEditor.discountMode ?? 'percent') === 'percent'
+                      ? '100'
+                      : undefined
+                  }
                   value={lineEditor.value}
                   onChange={(event) => setLineEditor({ ...lineEditor, value: event.target.value })}
                   onKeyDown={(event) => {
@@ -6148,15 +6745,16 @@ function App() {
                     type="button"
                     onClick={() => updateActivePrinterProfileSettings({ paperWidth: '80' })}
                   >
-                    80mm
+                    POS 80mm
                   </button>
                   <button
                     className={activePrinterSettings.paperWidth === '58' ? 'active' : ''}
                     type="button"
                     onClick={() => updateActivePrinterProfileSettings({ paperWidth: '58' })}
                   >
-                    58mm
+                    POS 58mm
                   </button>
+                  <small>Receipt, report, and KOT use selected POS paper width.</small>
                 </div>
 
                 <div className="profile-status-card">
@@ -6263,9 +6861,32 @@ function roundMoney(value: number) {
   return Math.round(value * 100) / 100
 }
 
+function getDiscountValue(baseAmount: number, mode: DiscountMode, percent = 0, amount = 0) {
+  const safeBaseAmount = Math.max(Number(baseAmount || 0), 0)
+  const rawDiscount =
+    mode === 'amount' ? Number(amount || 0) : (safeBaseAmount * clamp(Number(percent || 0), 0, 100)) / 100
+
+  return roundMoney(clamp(rawDiscount, 0, safeBaseAmount))
+}
+
+function getDiscountLabel(baseAmount: number, mode: DiscountMode, percent = 0, amount = 0) {
+  const discount = getDiscountValue(baseAmount, mode, percent, amount)
+
+  if (discount <= 0) {
+    return 'Discount'
+  }
+
+  return mode === 'amount' ? `Rs. ${money(discount)}` : `${clamp(Number(percent || 0), 0, 100)}%`
+}
+
 function lineTotal(line: CartLine) {
   const gross = Number(line.qty || 0) * Number(line.price || 0)
-  const discount = (gross * clamp(Number(line.discountPercent ?? 0), 0, 100)) / 100
+  const discount = getDiscountValue(
+    gross,
+    line.discountMode ?? 'percent',
+    line.discountPercent ?? 0,
+    line.discountAmount ?? 0,
+  )
   return roundMoney(Math.max(0, gross - discount))
 }
 
@@ -6276,13 +6897,160 @@ function normalizeLineDescription(value: unknown) {
 
 function getCartLineNote(line: CartLine) {
   const description = normalizeLineDescription(line.description)
-  const itemDiscount = clamp(Number(line.discountPercent ?? 0), 0, 100)
+  const gross = Number(line.qty || 0) * Number(line.price || 0)
+  const itemDiscount = getDiscountValue(gross, line.discountMode ?? 'percent', line.discountPercent ?? 0, line.discountAmount ?? 0)
+  const discountText =
+    itemDiscount > 0
+      ? line.discountMode === 'amount'
+        ? `Rs. ${money(itemDiscount)} item discount`
+        : `${clamp(Number(line.discountPercent ?? 0), 0, 100)}% item discount`
+      : ''
 
-  return [description, itemDiscount > 0 ? `${itemDiscount}% item discount` : ''].filter(Boolean).join(' / ')
+  return [description, discountText].filter(Boolean).join(' / ')
 }
 
 function money(value: number) {
   return value.toFixed(2)
+}
+
+function getTableGroupId(tableNo: string, tableGroups: DiningTableGroup[]) {
+  return tableGroups.find((group) => group.tables.includes(tableNo))?.id ?? tableGroups[0]?.id ?? ''
+}
+
+function getCurrentDiningTables(seatingMode: SeatingMode, tableLabel: string, selectedTables: string[]) {
+  if (seatingMode === 'group') {
+    return parseDiningTableNames(selectedTables)
+  }
+
+  return parseDiningTableNames(tableLabel)
+}
+
+function getSavedOrderTables(order: SavedOrder) {
+  const savedTables = parseDiningTableNames(order.tables ?? [])
+  if (savedTables.length) {
+    return savedTables
+  }
+
+  return getDiningTablesFromLabel(order.table)
+}
+
+function getDiningTablesFromLabel(value: string) {
+  const label = String(value ?? '')
+  const labelParts = label.split('/')
+  const tablePart = label.includes('/') ? labelParts[labelParts.length - 1] || '' : label
+  return parseDiningTableNames(tablePart.replace(/\+/g, ','))
+}
+
+function getSeatingDisplayLabel(
+  seatingMode: SeatingMode,
+  tableLabel: string,
+  selectedTables: string[],
+  diningGroupName: string,
+) {
+  const tables = parseDiningTableNames(seatingMode === 'group' ? selectedTables : tableLabel)
+
+  if (seatingMode === 'group') {
+    if (tables.length < 2) {
+      return ''
+    }
+
+    const groupName = diningGroupName.trim() || 'Group'
+    return `${groupName} / ${tables.join(', ')}`
+  }
+
+  return tables[0] || ''
+}
+
+function sortTablesByLayout(tables: string[], tableList: string[]) {
+  const layoutIndex = new Map(tableList.map((tableName, index) => [tableName.toLowerCase(), index]))
+
+  return [...parseDiningTableNames(tables)].sort((first, second) => {
+    const firstIndex = layoutIndex.get(first.toLowerCase()) ?? Number.MAX_SAFE_INTEGER
+    const secondIndex = layoutIndex.get(second.toLowerCase()) ?? Number.MAX_SAFE_INTEGER
+
+    return firstIndex - secondIndex || first.localeCompare(second, undefined, { numeric: true })
+  })
+}
+
+function printReportInBrowser(payload: ReportPrintPayload) {
+  const printWindow = window.open('', '_blank', 'width=420,height=700')
+
+  if (!printWindow) {
+    throw new Error('Print window blocked')
+  }
+
+  printWindow.document.open()
+  printWindow.document.write(buildReportPrintHtml(payload))
+  printWindow.document.close()
+  printWindow.focus()
+  printWindow.print()
+}
+
+function buildReportPrintHtml(payload: ReportPrintPayload) {
+  const report = payload.report
+  const orderTypeRows = report.orderTypeRows
+    .map((row) => `<tr><td>${escapePrintHtml(row.label)} x ${row.count ?? 0}</td><td>${money(row.total ?? 0)}</td></tr>`)
+    .join('')
+
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>${escapePrintHtml(report.title)}</title>
+    <style>
+      @page { margin: 0; size: ${payload.settings.paperWidth === '58' ? 58 : 80}mm auto; }
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 10px; color: #111; font-family: Arial, sans-serif; font-size: 12px; }
+      .center { text-align: center; }
+      .shop { font-size: 18px; font-weight: 800; }
+      .title { margin-top: 5px; font-size: 15px; font-weight: 800; }
+      .muted { color: #333; }
+      .rule { border-top: 1px dashed #111; margin: 8px 0; }
+      table { width: 100%; border-collapse: collapse; }
+      td { padding: 3px 0; vertical-align: top; }
+      td:last-child { text-align: right; white-space: nowrap; padding-left: 8px; }
+      .grand td { font-size: 17px; font-weight: 800; border-top: 1px solid #111; padding-top: 6px; }
+      .section { margin-top: 8px; font-weight: 800; }
+    </style>
+  </head>
+  <body>
+    <div class="center">
+      <div class="shop">${escapePrintHtml(report.business.name)}</div>
+      ${report.business.branch ? `<div class="muted">${escapePrintHtml(report.business.branch)}</div>` : ''}
+      ${report.business.phone ? `<div class="muted">Phone: ${escapePrintHtml(report.business.phone)}</div>` : ''}
+      <div class="title">${escapePrintHtml(report.title)}</div>
+      <div class="muted">${escapePrintHtml(report.periodLabel)}</div>
+      <div class="muted">${escapePrintHtml(formatDateTime(new Date(report.generatedAt)))}</div>
+    </div>
+    <div class="rule"></div>
+    <table>
+      <tr class="grand"><td>Total Sales</td><td>${money(report.salesTotal)}</td></tr>
+      <tr><td>Paid Bills</td><td>${report.paidCount}</td></tr>
+      <tr><td>Cash In Hand</td><td>${money(report.cashInHand)}</td></tr>
+      <tr><td>UPI</td><td>${money(report.upiTotal)}</td></tr>
+      <tr><td>Card</td><td>${money(report.cardTotal)}</td></tr>
+      <tr><td>Bank</td><td>${money(report.bankTotal)}</td></tr>
+      <tr><td>Due / Credit</td><td>${money(report.balanceTotal)}</td></tr>
+      <tr><td>Discount</td><td>${money(report.discountTotal)}</td></tr>
+      <tr><td>Open Amount</td><td>${money(report.openTotal)}</td></tr>
+      <tr><td>Open Bills</td><td>${report.openCount}</td></tr>
+    </table>
+    <div class="rule"></div>
+    <div class="section">Order Type</div>
+    <table>${orderTypeRows || '<tr><td>No orders</td><td>0.00</td></tr>'}</table>
+    <div class="rule"></div>
+    <div class="center"><strong>End of report</strong></div>
+  </body>
+</html>`
+}
+
+function escapePrintHtml(value: unknown) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
 }
 
 function formatTime(value: Date) {
@@ -6423,6 +7191,15 @@ function getReportPeriod(
   const to = endOfDay(parsedFrom <= parsedTo ? parsedTo : parsedFrom)
 
   return { mode, from, to, label: `${formatDate(from)} to ${formatDate(to)}` }
+}
+
+function getTodayReportPeriod(value: Date): ReportPeriod {
+  return {
+    mode: 'custom',
+    from: startOfDay(value),
+    to: endOfDay(value),
+    label: `Today - ${formatDate(value)}`,
+  }
 }
 
 function getPreviousReportPeriod(period: ReportPeriod): ReportPeriod {
@@ -6678,6 +7455,8 @@ function buildReport(orders: SavedOrder[], period?: ReportPeriod) {
     todayCashInHand: roundMoney(todayPaidOrders.reduce((sum, order) => sum + getOrderCashInHand(order), 0)),
     todayBank: roundMoney(todayPaidOrders.reduce((sum, order) => sum + getOrderBankReceived(order), 0)),
     cashInHand: roundMoney(paidOrders.reduce((sum, order) => sum + getOrderCashInHand(order), 0)),
+    upiTotal: roundMoney(paidOrders.reduce((sum, order) => sum + getOrderUpiReceived(order), 0)),
+    cardTotal: roundMoney(paidOrders.reduce((sum, order) => sum + getOrderCardReceived(order), 0)),
     bankTotal: roundMoney(paidOrders.reduce((sum, order) => sum + getOrderBankReceived(order), 0)),
     openTotal: roundMoney(openOrders.reduce((sum, order) => sum + order.totals.total, 0)),
     discountTotal: roundMoney(paidOrders.reduce((sum, order) => sum + order.totals.discount, 0)),
@@ -6830,13 +7609,32 @@ function ReportTrendChart({ points }: { points: ReportTrendPoint[] }) {
 function getOrderCashInHand(order: SavedOrder) {
   const cash = Math.max(0, Number(order.paymentBreakdown?.cash ?? 0))
   const returnAmount = Math.max(0, Number(order.totals.change ?? 0))
-  return roundMoney(Math.max(0, cash - returnAmount))
+  const fallbackCash = !hasSavedPaymentBreakdown(order) && order.paymentMethod === 'Cash' ? order.totals.total : cash
+  return roundMoney(Math.max(0, fallbackCash - returnAmount))
+}
+
+function getOrderUpiReceived(order: SavedOrder) {
+  const upi = Math.max(0, Number(order.paymentBreakdown?.upi ?? 0))
+  return roundMoney(!hasSavedPaymentBreakdown(order) && order.paymentMethod === 'UPI' ? order.totals.total : upi)
+}
+
+function getOrderCardReceived(order: SavedOrder) {
+  const card = Math.max(0, Number(order.paymentBreakdown?.card ?? 0))
+  return roundMoney(!hasSavedPaymentBreakdown(order) && order.paymentMethod === 'Card' ? order.totals.total : card)
 }
 
 function getOrderBankReceived(order: SavedOrder) {
-  const upi = Math.max(0, Number(order.paymentBreakdown?.upi ?? 0))
-  const card = Math.max(0, Number(order.paymentBreakdown?.card ?? 0))
-  return roundMoney(upi + card)
+  return roundMoney(getOrderUpiReceived(order) + getOrderCardReceived(order))
+}
+
+function hasSavedPaymentBreakdown(order: SavedOrder) {
+  const breakdown = order.paymentBreakdown
+
+  if (!breakdown) {
+    return false
+  }
+
+  return Number(breakdown.cash || 0) > 0 || Number(breakdown.upi || 0) > 0 || Number(breakdown.card || 0) > 0
 }
 
 function hasDesktopDataStore() {
@@ -6948,13 +7746,53 @@ function normalizePaymentMethod(value: unknown): PaymentMethod {
   return 'Cash'
 }
 
+function normalizeDiscountMode(value: unknown): DiscountMode {
+  return value === 'amount' ? 'amount' : 'percent'
+}
+
+function normalizeSeatingMode(value: unknown): SeatingMode {
+  return value === 'group' ? 'group' : 'individual'
+}
+
+function normalizeCartLine(line: CartLine): CartLine {
+  const legacyLine = line as CartLine & {
+    discountMode?: unknown
+    discountPercent?: number
+    discountAmount?: number
+  }
+  const discountMode = normalizeDiscountMode(legacyLine.discountMode)
+  const qty = Math.max(Number(legacyLine.qty ?? 0), 0)
+  const price = Math.max(Number(legacyLine.price ?? 0), 0)
+  const gross = qty * price
+
+  return {
+    ...line,
+    qty,
+    price,
+    taxRate: Math.max(Number(legacyLine.taxRate ?? 0), 0),
+    discountMode,
+    discountPercent: discountMode === 'percent' ? clamp(Number(legacyLine.discountPercent ?? 0), 0, 100) : 0,
+    discountAmount: discountMode === 'amount' ? clamp(Number(legacyLine.discountAmount ?? 0), 0, gross) : 0,
+    description: normalizeLineDescription(legacyLine.description),
+  }
+}
+
 function normalizeSavedOrderPayment(order: SavedOrder): SavedOrder {
   const legacyOrder = order as SavedOrder & {
     paymentBreakdown?: Partial<PaymentBreakdown>
     paymentMethod?: unknown
     totals?: Partial<OrderTotals>
     amountReceived?: number
+    discountMode?: unknown
+    discountPercent?: number
+    discountAmount?: number
+    seatingMode?: unknown
+    tables?: unknown
+    diningGroupName?: unknown
   }
+  const savedTables = parseDiningTableNames(legacyOrder.tables ?? getDiningTablesFromLabel(order.table))
+  const discountMode = normalizeDiscountMode(legacyOrder.discountMode)
+  const seatingMode = legacyOrder.seatingMode ? normalizeSeatingMode(legacyOrder.seatingMode) : savedTables.length > 1 ? 'group' : 'individual'
   const paymentMethod = normalizePaymentMethod(legacyOrder.paymentMethod)
   const fallbackReceived = Number(legacyOrder.amountReceived ?? legacyOrder.totals?.paid ?? 0)
   const paymentBreakdown: PaymentBreakdown = {
@@ -6982,6 +7820,13 @@ function normalizeSavedOrderPayment(order: SavedOrder): SavedOrder {
   return {
     ...order,
     customerId: order.customerId || undefined,
+    seatingMode,
+    tables: savedTables,
+    diningGroupName: seatingMode === 'group' ? String(legacyOrder.diningGroupName ?? '').trim() : '',
+    cart: Array.isArray(order.cart) ? order.cart.map(normalizeCartLine) : [],
+    discountMode,
+    discountPercent: clamp(Number(legacyOrder.discountPercent ?? 0), 0, 100),
+    discountAmount: roundMoney(Math.max(Number(legacyOrder.discountAmount ?? 0), 0)),
     paymentMethod,
     paymentBreakdown,
     amountReceived,
@@ -6997,6 +7842,65 @@ function normalizeSavedOrderPayment(order: SavedOrder): SavedOrder {
     },
     creditApplied: Boolean(order.creditApplied),
   }
+}
+
+function normalizeDiningTableGroups(groups: DiningTableGroup[]) {
+  const sourceGroups = Array.isArray(groups) && groups.length ? groups : defaultDiningTableGroups
+  const usedIds = new Set<string>()
+  const normalizedGroups = sourceGroups
+    .map((group, index) => {
+      const label = String(group?.label ?? `Area ${index + 1}`).trim()
+      const tables = parseDiningTableNames(group?.tables ?? [])
+      const baseId = String(group?.id || createDiningTableGroupId(label)).trim() || createDiningTableGroupId(label)
+      let id = baseId
+      let suffix = 2
+      while (usedIds.has(id)) {
+        id = `${baseId}-${suffix}`
+        suffix += 1
+      }
+      usedIds.add(id)
+
+      return label && tables.length ? { id, label, tables } : null
+    })
+    .filter((group): group is DiningTableGroup => Boolean(group))
+
+  if (normalizedGroups.length) {
+    return normalizedGroups
+  }
+
+  return defaultDiningTableGroups.map((group) => ({ ...group, tables: [...group.tables] }))
+}
+
+function parseDiningTableNames(value: unknown) {
+  const rawValues = Array.isArray(value)
+    ? value
+    : String(value ?? '')
+        .split(/[\n,;]+/)
+        .map((item) => item.trim())
+  const seen = new Set<string>()
+  const tables: string[] = []
+
+  rawValues.forEach((rawValue) => {
+    const tableName = String(rawValue ?? '').trim().replace(/\s+/g, ' ')
+    const key = tableName.toLowerCase()
+    if (tableName && !seen.has(key)) {
+      seen.add(key)
+      tables.push(tableName)
+    }
+  })
+
+  return tables
+}
+
+function createDiningTableGroupId(label: string) {
+  const slug =
+    label
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '') || 'table-area'
+
+  return `${slug}-${Date.now().toString(36)}`
 }
 
 function normalizeCategories(categories: Category[]) {
