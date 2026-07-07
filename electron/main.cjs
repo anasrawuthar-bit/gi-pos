@@ -632,8 +632,12 @@ function buildReceiptHtml(payload) {
         <div class="rule"></div>
         <table class="totals">
           <tr><td>Subtotal</td><td>${money(order.subtotal)}</td></tr>
-          <tr><td>Discount</td><td>${money(order.discount)}</td></tr>
-          <tr><td>Tax</td><td>${money(order.tax)}</td></tr>
+          ${order.discount > 0 ? `<tr><td>Discount</td><td>-${money(order.discount)}</td></tr>` : ''}
+          ${order.tax > 0 ? `
+            <tr><td>CGST</td><td>${money(order.tax / 2)}</td></tr>
+            <tr><td>SGST</td><td>${money(order.tax / 2)}</td></tr>
+          ` : ''}
+          ${order.serviceCharge > 0 ? `<tr><td>Service Charge</td><td>${money(order.serviceCharge)}</td></tr>` : ''}
           <tr class="grand"><td>Total</td><td>${money(order.total)}</td></tr>
         </table>
         <div class="rule"></div>
@@ -834,8 +838,16 @@ function buildEscPosReceipt(payload) {
 
   text(parts, line(columns));
   text(parts, twoCol('Subtotal', money(order.subtotal), columns));
-  text(parts, twoCol('Discount', money(order.discount), columns));
-  text(parts, twoCol('Tax', money(order.tax), columns));
+  if (order.discount > 0) {
+    text(parts, twoCol('Discount', `-${money(order.discount)}`, columns));
+  }
+  if (order.tax > 0) {
+    text(parts, twoCol('CGST', money(order.tax / 2), columns));
+    text(parts, twoCol('SGST', money(order.tax / 2), columns));
+  }
+  if (order.serviceCharge > 0) {
+    text(parts, twoCol('Service Charge', money(order.serviceCharge), columns));
+  }
   text(parts, line(columns));
   bold(parts, true);
   text(parts, twoCol('TOTAL', money(order.total), columns));

@@ -106,6 +106,7 @@ type MenuItem = {
   imageDataUrl?: string
   available?: boolean
   unavailableReason?: string
+  taxRate?: number
 }
 
 type ExpensePaymentMethod = 'Cash' | 'Bank'
@@ -237,6 +238,7 @@ type ItemDraft = {
   imageDataUrl: string
   available: boolean
   unavailableReason: string
+  taxRate: string
 }
 
 type ExpenseDraft = {
@@ -280,6 +282,8 @@ type BusinessProfile = {
   gstin: string
   receiptFooter: string
   logoDataUrl: string
+  defaultGstRate: number
+  gstType: 'exclusive' | 'inclusive'
 }
 
 type CloudSyncSettings = {
@@ -620,6 +624,8 @@ const defaultBusinessProfile: BusinessProfile = {
   gstin: '',
   receiptFooter: 'Thank you. Visit again.',
   logoDataUrl: '',
+  defaultGstRate: 0,
+  gstType: 'exclusive',
 }
 
 const defaultCloudSyncSettings: CloudSyncSettings = {
@@ -776,6 +782,7 @@ function App() {
     imageDataUrl: '',
     available: true,
     unavailableReason: '',
+    taxRate: '',
   }))
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null)
   const [expenseDraft, setExpenseDraft] = useState<ExpenseDraft>(() => ({
@@ -1120,15 +1127,18 @@ function App() {
   )
 
   const baseTotals = useMemo(() => {
+    const isInclusive = businessProfile.gstType === 'inclusive'
     const subtotal = cart.reduce((sum, line) => sum + lineTotal(line), 0)
     const discount = getDiscountValue(subtotal, discountMode, discountPercent, discountAmount)
     const taxable = subtotal - discount
-    const tax = roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * line.taxRate) / 100, 0))
+    const tax = isInclusive
+      ? roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * line.taxRate) / (100 + line.taxRate), 0))
+      : roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * line.taxRate) / 100, 0))
     const serviceCharge = roundMoney((taxable * servicePercent) / 100)
-    const total = roundMoney(Math.max(0, taxable + tax + serviceCharge))
+    const total = roundMoney(Math.max(0, isInclusive ? taxable + serviceCharge : taxable + tax + serviceCharge))
 
     return { subtotal, discount, tax, serviceCharge, total }
-  }, [cart, discountAmount, discountMode, discountPercent, servicePercent])
+  }, [cart, discountAmount, discountMode, discountPercent, servicePercent, businessProfile.gstType])
 
   const cashReceived =
     paymentMethod === 'Cash' || paymentMethod === 'Part'
@@ -2252,7 +2262,7 @@ function App() {
     recordAudit(existing ? 'user_updated' : 'user_created', `${name} permissions saved`)
   }
 
-  function updateBusinessProfile(field: keyof BusinessProfile, value: string) {
+  function updateBusinessProfile<K extends keyof BusinessProfile>(field: K, value: BusinessProfile[K]) {
     if (!requirePermission('business_profile')) {
       return
     }
@@ -3339,7 +3349,7 @@ function App() {
           name: item.name,
           price: itemPrice,
           qty: 1,
-          taxRate: 0,
+          taxRate: typeof item.taxRate === 'number' ? item.taxRate : (businessProfile.defaultGstRate ?? 0),
           discountMode: 'percent',
           discountPercent: 0,
           discountAmount: 0,
@@ -3930,18 +3940,19 @@ function App() {
     }
 
     const itemPrice = roundMoney(price)
+    const taxRate = itemDraft.taxRate.trim() === '' ? businessProfile.defaultGstRate : (Number(itemDraft.taxRate) || 0)
 
     if (editingItemId) {
       setMenuList((list) =>
         list.map((item) =>
           item.id === editingItemId
-            ? { ...item, name, price: itemPrice, category, tags, imageDataUrl, available, unavailableReason }
+            ? { ...item, name, price: itemPrice, category, tags, imageDataUrl, available, unavailableReason, taxRate }
             : item,
         ),
       )
     } else {
       const id = makeUniqueId(name, menuList.map((item) => item.id))
-      setMenuList((list) => [...list, { id, name, category, price: itemPrice, tags, imageDataUrl, available, unavailableReason }])
+      setMenuList((list) => [...list, { id, name, category, price: itemPrice, tags, imageDataUrl, available, unavailableReason, taxRate }])
       setActiveCategory(category)
     }
 
@@ -3958,6 +3969,7 @@ function App() {
       imageDataUrl: item.imageDataUrl ?? '',
       available: item.available !== false,
       unavailableReason: item.unavailableReason ?? '',
+      taxRate: String(item.taxRate ?? 0),
     })
   }
 
@@ -3983,6 +3995,7 @@ function App() {
       imageDataUrl: '',
       available: true,
       unavailableReason: '',
+      taxRate: '',
     })
   }
 
@@ -5532,6 +5545,26 @@ function App() {
                   />
                 </label>
                 <label>
+                  Default GST Rate (%)
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={businessProfile.defaultGstRate}
+                    onChange={(event) => updateBusinessProfile('defaultGstRate', Number(event.target.value) || 0)}
+                  />
+                </label>
+                <label>
+                  GST Treatment
+                  <select
+                    value={businessProfile.gstType}
+                    onChange={(event) => updateBusinessProfile('gstType', event.target.value as 'exclusive' | 'inclusive')}
+                  >
+                    <option value="exclusive">Exclusive (Tax added on top)</option>
+                    <option value="inclusive">Inclusive (Tax included in price)</option>
+                  </select>
+                </label>
+                <label>
                   Receipt Footer
                   <input
                     value={businessProfile.receiptFooter}
@@ -6624,6 +6657,39 @@ function App() {
                     onChange={(event) => setAmountReceivedOverride(numberFromInput(event.target.value))}
                   />
                 </label>
+              )}
+
+              {cart.length > 0 && (
+                <div className="bill-summary-breakdown" style={{ display: 'grid', gap: '4px', fontSize: '12px', color: '#4b5563', borderBottom: '1px dashed #e5e7eb', paddingBottom: '6px', marginBottom: '6px', marginTop: '6px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Subtotal</span>
+                    <strong>{money(totals.subtotal)}</strong>
+                  </div>
+                  {totals.discount > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: '#dc2626' }}>
+                      <span>Discount</span>
+                      <strong>-{money(totals.discount)}</strong>
+                    </div>
+                  )}
+                  {totals.tax > 0 && (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>CGST</span>
+                        <strong>{money(totals.tax / 2)}</strong>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>SGST</span>
+                        <strong>{money(totals.tax / 2)}</strong>
+                      </div>
+                    </>
+                  )}
+                  {totals.serviceCharge > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>Service Charge</span>
+                      <strong>{money(totals.serviceCharge)}</strong>
+                    </div>
+                  )}
+                </div>
               )}
 
               <div className="grand-total">
@@ -7879,6 +7945,17 @@ function App() {
                     )}
                   </label>
                   <label>
+                    GST Rate (%)
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      placeholder={`Default (${businessProfile.defaultGstRate}%)`}
+                      value={itemDraft.taxRate}
+                      onChange={(event) => setItemDraft((draft) => ({ ...draft, taxRate: event.target.value }))}
+                    />
+                  </label>
+                  <label>
                     Tags
                     <input
                       placeholder="special, hot"
@@ -8304,9 +8381,14 @@ function lineTotal(line: CartLine) {
 }
 
 function buildCartOnlyTotals(cart: CartLine[]): OrderTotals {
+  const profile = loadStoredObject('pos-business-profile', defaultBusinessProfile)
+  const isInclusive = profile?.gstType === 'inclusive'
+
   const subtotal = roundMoney(cart.reduce((sum, line) => sum + lineTotal(line), 0))
-  const tax = roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * Number(line.taxRate || 0)) / 100, 0))
-  const total = roundMoney(subtotal + tax)
+  const tax = isInclusive
+    ? roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * Number(line.taxRate || 0)) / (100 + Number(line.taxRate || 0)), 0))
+    : roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * Number(line.taxRate || 0)) / 100, 0))
+  const total = isInclusive ? subtotal : roundMoney(subtotal + tax)
 
   return {
     subtotal,
@@ -8861,6 +8943,7 @@ function normalizeMenuItems(items: MenuItem[]) {
       imageDataUrl: typeof item.imageDataUrl === 'string' && item.imageDataUrl ? item.imageDataUrl : undefined,
       available: item.available === false ? false : true,
       unavailableReason: item.available === false && unavailableReason ? unavailableReason : undefined,
+      taxRate: Number(item.taxRate ?? 0) || 0,
     }
   })
 }
@@ -9706,6 +9789,8 @@ function normalizeBusinessProfile(profile: Partial<BusinessProfile> = defaultBus
     gstin: String(profile.gstin ?? defaultBusinessProfile.gstin),
     receiptFooter: String(profile.receiptFooter ?? defaultBusinessProfile.receiptFooter),
     logoDataUrl: String(profile.logoDataUrl ?? defaultBusinessProfile.logoDataUrl),
+    defaultGstRate: Number(profile.defaultGstRate ?? defaultBusinessProfile.defaultGstRate) || 0,
+    gstType: (profile.gstType === 'inclusive' || profile.gstType === 'exclusive') ? profile.gstType : defaultBusinessProfile.gstType,
   }
   const hasRealBillingDetails = Boolean(
     normalizedProfile.phone.trim() ||
