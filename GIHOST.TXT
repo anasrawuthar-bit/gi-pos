@@ -1,0 +1,645 @@
+to run locally need to configure PostgreSQL
+
+$env:PORT="8080"; 
+$env:DATABASE_URL="postgres://postgres:1234@localhost:5432/pos"; 
+$env:GI_CLOUD_ADMIN_TOKEN="password"; 
+$env:GI_PUBLIC_BASE_URL=""; node src/server.js
+
+GI POS CLOUD HOSTING NOTE
+=========================
+
+Project folder:
+  cloud/
+
+Domain planned:
+  https://goldensea.gihostings.in
+
+Cloud app port:
+  8080
+
+Database:
+  PostgreSQL
+
+
+1. WHAT THIS CLOUD SERVER DOES
+------------------------------
+
+The cloud folder is the online server for GI POS Restaurant.
+
+It handles:
+  - client signup
+  - GI admin approval
+  - subscription expiry/status
+  - portal login
+  - desktop app cloud login
+  - cloud restore after reinstall/new PC
+  - auto/manual sync
+  - app user PIN reset from portal
+  - client portal password reset from GI admin panel
+  - Windows app download/update files
+
+The desktop app still works with local SQLite first. Cloud is used for backup,
+restore, subscription checking, and sync.
+
+
+2. REQUIRED VPS SOFTWARE
+------------------------
+
+Install these on the VPS:
+
+  - Node.js 20 or newer
+  - PostgreSQL
+  - Nginx
+  - PM2
+  - Certbot for HTTPS SSL
+  - Git
+
+Ubuntu/Debian example:
+
+  sudo apt update
+  sudo apt install -y curl git nginx postgresql postgresql-contrib certbot python3-certbot-nginx
+
+Install Node.js 20:
+
+  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+  sudo apt install -y nodejs
+
+Install PM2:
+
+  sudo npm install -g pm2
+
+Check versions:
+
+  node -v
+  npm -v
+  pm2 -v
+  psql --version
+
+
+3. CREATE POSTGRES DATABASE
+---------------------------
+
+Login to PostgreSQL:
+
+  sudo -u postgres psql
+
+Create database user and database:
+
+  CREATE USER gi_pos_user WITH PASSWORD 'CHANGE_STRONG_DB_PASSWORD';
+  CREATE DATABASE gi_pos_cloud OWNER gi_pos_user;
+  GRANT ALL PRIVILEGES ON DATABASE gi_pos_cloud TO gi_pos_user;
+  \q
+
+Your DATABASE_URL will be:
+
+  postgres://gi_pos_user:CHANGE_STRONG_DB_PASSWORD@127.0.0.1:5432/gi_pos_cloud
+
+Do not use password 1234 on VPS. Use a strong password.
+
+
+4. UPLOAD PROJECT TO VPS
+------------------------
+
+Recommended folder:
+
+  /var/www/gi-pos
+
+Example:
+
+  sudo mkdir -p /var/www/gi-pos
+  sudo chown -R $USER:$USER /var/www/gi-pos
+
+If using GitHub:
+
+  cd /var/www
+  git clone https://github.com/anasrawuthar-bit/gi-pos.git gi-pos
+
+Or upload the project files manually, then go to:
+
+  cd /var/www/gi-pos
+
+
+5. CREATE CLOUD ENV FILE
+------------------------
+
+Create:
+
+  /var/www/gi-pos/cloud/.env
+
+Example:
+
+  PORT=8080
+  DATABASE_URL=postgres://gi_pos_user:CHANGE_STRONG_DB_PASSWORD@127.0.0.1:5432/gi_pos_cloud
+  GI_CLOUD_ADMIN_TOKEN=CHANGE_LONG_ADMIN_TOKEN
+  GI_CLIENT_TOKEN_SECRET=CHANGE_LONG_CLIENT_SECRET
+  GI_PUBLIC_BASE_URL=https://goldensea.gihostings.in
+
+Important:
+
+  GI_CLOUD_ADMIN_TOKEN is your private GI admin panel password/token.
+  Use it only for /admin.
+  Do not give it to clients.
+
+  GI_PUBLIC_BASE_URL keeps the connection page and public config fixed to
+  your HTTPS domain, even when Node runs behind Nginx.
+
+Generate strong random values:
+
+  openssl rand -hex 32
+
+Use one generated value for GI_CLOUD_ADMIN_TOKEN and another one for
+GI_CLIENT_TOKEN_SECRET.
+
+
+6. INSTALL CLOUD DEPENDENCIES
+-----------------------------
+
+From project root:
+
+  cd /var/www/gi-pos
+  npm install --prefix cloud
+
+
+7. RUN DATABASE MIGRATION
+-------------------------
+
+From project root:
+
+  npm run migrate --prefix cloud
+
+If migration succeeds, PostgreSQL tables are ready.
+
+If DATABASE_URL error comes:
+  - check cloud/.env exists
+  - check database username/password
+  - check PostgreSQL is running
+
+
+8. TEST CLOUD SERVER DIRECTLY
+-----------------------------
+
+Start once manually:
+
+  npm run start --prefix cloud
+
+Open another terminal and test:
+
+  curl http://127.0.0.1:8080/health
+
+Expected:
+
+  OK response / health response
+
+Stop manual server with:
+
+  CTRL + C
+
+
+9. RUN CLOUD SERVER WITH PM2
+----------------------------
+
+From project root:
+
+  cd /var/www/gi-pos
+  pm2 start cloud/src/server.js --name gi-pos-cloud
+  pm2 save
+  pm2 startup
+
+After running pm2 startup, PM2 will show one sudo command.
+Copy and run that command.
+
+Useful PM2 commands:
+
+  pm2 status
+  pm2 logs gi-pos-cloud
+  pm2 restart gi-pos-cloud
+  pm2 stop gi-pos-cloud
+
+
+10. SETUP NGINX REVERSE PROXY
+-----------------------------
+
+Create Nginx config:
+
+  sudo nano /etc/nginx/sites-available/goldensea.gihostings.in
+
+Paste:
+
+  server {
+      listen 80;
+      server_name goldensea.gihostings.in;
+
+      client_max_body_size 400m;
+
+      location / {
+          proxy_pass http://127.0.0.1:8080;
+          proxy_http_version 1.1;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+      }
+  }
+
+Enable it:
+
+  sudo ln -s /etc/nginx/sites-available/goldensea.gihostings.in /etc/nginx/sites-enabled/
+  sudo nginx -t
+  sudo systemctl reload nginx
+
+
+11. POINT DOMAIN DNS
+--------------------
+
+In domain DNS manager, create:
+
+  Type: A
+  Name: goldensea
+  Value: VPS_PUBLIC_IP
+
+Wait until DNS is active.
+
+Check:
+
+  ping goldensea.gihostings.in
+
+
+12. ENABLE HTTPS SSL
+--------------------
+
+Run:
+
+  sudo certbot --nginx -d goldensea.gihostings.in
+
+Choose redirect HTTP to HTTPS when asked.
+
+Test:
+
+  https://goldensea.gihostings.in/health
+
+
+13. IMPORTANT CLOUD URLS
+------------------------
+
+Health:
+
+  https://goldensea.gihostings.in/health
+
+Connection check page:
+
+  https://goldensea.gihostings.in/connect
+
+Public JSON config:
+
+  https://goldensea.gihostings.in/api/v1/public/config
+
+Client signup:
+
+  https://goldensea.gihostings.in/signup
+
+Client portal:
+
+  https://goldensea.gihostings.in/portal
+
+GI admin panel:
+
+  https://goldensea.gihostings.in/admin
+
+Windows app download:
+
+  https://goldensea.gihostings.in/download/windows
+
+Auto update latest.yml:
+
+  https://goldensea.gihostings.in/updates/win/latest.yml
+
+Recommended VPS env:
+
+  GI_PUBLIC_BASE_URL=https://goldensea.gihostings.in
+
+
+14. FIRST CLIENT SETUP FLOW
+---------------------------
+
+1. Client opens:
+
+     https://goldensea.gihostings.in/signup
+
+2. Client submits:
+
+     business name
+     owner name
+     phone/email
+     password
+
+3. GI opens:
+
+     https://goldensea.gihostings.in/admin
+
+4. GI enters GI_CLOUD_ADMIN_TOKEN.
+
+5. Approve the client restaurant.
+
+6. Set subscription plan and expiry date.
+
+7. Client opens desktop app.
+
+8. On first cloud login, use:
+
+     Cloud URL: https://goldensea.gihostings.in
+     Phone/Email: signup phone or email
+     Password: signup password
+
+9. App restores server data into local SQLite.
+
+10. If no old app users are found, app asks to create Owner PIN.
+
+11. After login, enable Auto Sync.
+
+
+15. DAILY LOGIN FLOW
+--------------------
+
+Desktop staff login should use local PIN.
+
+Cloud phone/email/password is only for:
+
+  - first setup
+  - reinstall restore
+  - new PC restore
+  - subscription/account validation
+
+
+16. SYNC DATA
+-------------
+
+Synced to cloud:
+
+  - business profile
+  - menu categories
+  - dining table areas and table list
+  - menu items
+  - item photos saved in local data
+  - expenses
+  - customers
+  - customer due balances
+  - saved bills/orders
+  - desktop app users
+  - user permissions
+  - hashed PIN data
+  - next bill number calculated from restored bills
+
+Not synced:
+
+  - printer port selection
+  - local printer profiles
+  - theme/display settings
+  - unsaved current cart
+  - local SQLite file path
+
+
+17. WINDOWS APP UPDATE / DOWNLOAD FILES
+---------------------------------------
+
+Recommended admin panel method:
+
+  1. Build the Windows app.
+  2. Open:
+
+       https://goldensea.gihostings.in/admin
+
+  3. Enter GI_CLOUD_ADMIN_TOKEN.
+  4. Open Windows App Update section.
+  5. Select all three files from the desktop build release folder:
+
+       latest.yml
+       GI POS Restaurant Setup 1.1.19.exe
+       GI POS Restaurant Setup 1.1.19.exe.blockmap
+
+  6. Click Upload Update.
+
+The admin panel validates:
+
+  - latest.yml must point to the selected setup exe
+  - blockmap filename must match the setup exe name
+  - all three files must be present
+
+If upload fails with "413 Request Entity Too Large", increase Nginx
+client_max_body_size and reload Nginx.
+
+Manual fallback:
+
+After building the Windows app, copy release files to:
+
+  /var/www/gi-pos/cloud/updates/win/
+
+Required files:
+
+  latest.yml
+  GI POS Restaurant Setup 1.1.19.exe
+  GI POS Restaurant Setup 1.1.19.exe.blockmap
+
+Create folder if missing:
+
+  mkdir -p /var/www/gi-pos/cloud/updates/win
+
+Then copy files and restart cloud:
+
+  pm2 restart gi-pos-cloud
+
+Client portal download button uses:
+
+  /download/windows
+
+Electron auto updater checks:
+
+  /updates/win/latest.yml
+
+
+18. UPDATE CLOUD CODE FROM GITHUB
+---------------------------------
+
+When code is updated:
+
+  cd /var/www/gi-pos
+  git pull origin main
+  npm install --prefix cloud
+  npm run migrate --prefix cloud
+  pm2 restart gi-pos-cloud
+
+Check logs:
+
+  pm2 logs gi-pos-cloud
+
+
+19. LOCAL WINDOWS TESTING
+-------------------------
+
+If cloud server is running on same PC:
+
+  http://localhost:8080
+
+If cloud server is running on another PC in same WiFi/LAN:
+
+  http://SERVER_PC_LAN_IP:8080
+
+Example:
+
+  http://192.168.1.4:8080
+
+Important:
+
+  localhost means this same computer only.
+  Another billing PC cannot reach your cloud server using localhost.
+
+For VPS production:
+
+  https://goldensea.gihostings.in
+
+
+20. FIREWALL
+------------
+
+On VPS, allow Nginx ports:
+
+  sudo ufw allow OpenSSH
+  sudo ufw allow 'Nginx Full'
+  sudo ufw enable
+  sudo ufw status
+
+You usually do not need to open port 8080 publicly because Nginx forwards to it
+locally.
+
+
+21. COMMON ERRORS
+-----------------
+
+Error: Sync failed / Failed to fetch
+
+Check:
+  - cloud server is running
+  - Cloud URL is correct
+  - use https://goldensea.gihostings.in for VPS
+  - use LAN IP for another local PC
+  - do not use localhost from another PC
+  - Nginx SSL is working
+  - PM2 logs have no database error
+
+Error: DATABASE_URL is required
+
+Fix:
+  - create cloud/.env
+  - set DATABASE_URL
+  - restart PM2
+
+Error: Admin panel not loading clients
+
+Fix:
+  - use correct GI_CLOUD_ADMIN_TOKEN
+  - check cloud/.env
+  - restart PM2
+
+Error: Client cannot login
+
+Check:
+  - client signup is approved
+  - subscription expiry date is active
+  - password is correct
+  - GI admin can reset portal password
+
+Error: App restore completed but no users found
+
+Meaning:
+  - old desktop app had not synced app users yet
+  - app should allow creating a new Owner PIN after restore
+  - run manual sync from old app if available, then restore again
+
+
+22. BACKUP
+----------
+
+Backup PostgreSQL:
+
+  pg_dump -U gi_pos_user -h 127.0.0.1 gi_pos_cloud > gi_pos_cloud_backup.sql
+
+Restore:
+
+  psql -U gi_pos_user -h 127.0.0.1 gi_pos_cloud < gi_pos_cloud_backup.sql
+
+Recommended:
+
+  - take daily database backup
+  - keep at least 7 days backup
+  - keep one monthly backup
+  - do not store backups only on the same VPS
+
+
+23. SECURITY NOTES
+------------------
+
+Use HTTPS only in production.
+
+Keep these secret:
+
+  - DATABASE_URL password
+  - GI_CLOUD_ADMIN_TOKEN
+  - GI_CLIENT_TOKEN_SECRET
+
+Do not commit cloud/.env to GitHub.
+
+Use strong client passwords.
+
+Use local staff PIN only for day-to-day desktop POS login.
+
+GI admin panel should be used only by GI/admin staff.
+
+
+24. FINAL PRODUCTION CHECKLIST
+------------------------------
+
+Before giving app to client:
+
+  [ ] Domain points to VPS IP
+  [ ] HTTPS works
+  [ ] /health works
+  [ ] PostgreSQL migration completed
+  [ ] PM2 app running
+  [ ] Nginx proxy working
+  [ ] /signup opens
+  [ ] /portal opens
+  [ ] /admin opens
+  [ ] Client signup approved
+  [ ] Subscription expiry set
+  [ ] Desktop app cloud login works
+  [ ] Manual sync works
+  [ ] Auto sync works
+  [ ] Restore server data works on another PC
+  [ ] Windows app download works from portal
+  [ ] latest.yml update URL works
+
+
+25. BEST PRODUCTION COMMAND SUMMARY
+-----------------------------------
+
+  cd /var/www/gi-pos
+  npm install --prefix cloud
+  npm run migrate --prefix cloud
+  pm2 start cloud/src/server.js --name gi-pos-cloud
+  pm2 save
+
+Nginx:
+
+  sudo nginx -t
+  sudo systemctl reload nginx
+
+SSL:
+
+  sudo certbot --nginx -d goldensea.gihostings.in
+
+Logs:
+
+  pm2 logs gi-pos-cloud
+
+Restart:
+
+  pm2 restart gi-pos-cloud

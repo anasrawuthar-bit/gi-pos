@@ -1,0 +1,120 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_name TEXT NOT NULL,
+  phone TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  password_hash TEXT NOT NULL DEFAULT '',
+  recovery_code_hash TEXT NOT NULL DEFAULT '',
+  recovery_code_set_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS recovery_code_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS recovery_code_set_at TIMESTAMPTZ;
+
+CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_unique_idx
+  ON accounts (lower(email))
+  WHERE email <> '';
+
+CREATE UNIQUE INDEX IF NOT EXISTS accounts_phone_unique_idx
+  ON accounts (phone)
+  WHERE phone <> '';
+
+CREATE TABLE IF NOT EXISTS restaurants (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  owner_name TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'approved',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS account_id UUID REFERENCES accounts(id) ON DELETE SET NULL;
+ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS owner_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS phone TEXT NOT NULL DEFAULT '';
+ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT '';
+ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'approved';
+
+CREATE INDEX IF NOT EXISTS restaurants_account_id_idx ON restaurants(account_id);
+CREATE INDEX IF NOT EXISTS restaurants_status_idx ON restaurants(status);
+
+CREATE TABLE IF NOT EXISTS devices (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  api_key_hash TEXT NOT NULL,
+  active BOOLEAN NOT NULL DEFAULT true,
+  last_seen_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS devices_restaurant_id_idx ON devices(restaurant_id);
+
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+  plan_name TEXT NOT NULL DEFAULT 'Monthly',
+  status TEXT NOT NULL DEFAULT 'active',
+  starts_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  max_devices INTEGER NOT NULL DEFAULT 999999,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS subscriptions_restaurant_status_idx
+  ON subscriptions(restaurant_id, status, expires_at);
+
+INSERT INTO subscriptions (restaurant_id, plan_name, status, starts_at, expires_at, max_devices)
+SELECT r.id, 'Legacy', 'active', now(), now() + interval '365 days', 999999
+FROM restaurants r
+WHERE r.status = 'approved'
+  AND NOT EXISTS (
+    SELECT 1 FROM subscriptions s WHERE s.restaurant_id = r.id
+  );
+
+CREATE TABLE IF NOT EXISTS pairing_codes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL,
+  device_name TEXT NOT NULL DEFAULT 'POS Counter',
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  used_by_device UUID REFERENCES devices(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS pairing_codes_code_hash_idx ON pairing_codes(code_hash);
+CREATE INDEX IF NOT EXISTS pairing_codes_restaurant_idx ON pairing_codes(restaurant_id, expires_at);
+
+CREATE TABLE IF NOT EXISTS cloud_kv (
+  restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  value JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by_device UUID REFERENCES devices(id) ON DELETE SET NULL,
+  PRIMARY KEY (restaurant_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS sync_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_event_id TEXT NOT NULL,
+  restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+  device_id UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (restaurant_id, device_id, client_event_id)
+);
+
+CREATE INDEX IF NOT EXISTS sync_events_restaurant_created_idx ON sync_events(restaurant_id, created_at);
