@@ -6092,3 +6092,17 @@ button {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
+
+.report-print-date-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.report-print-date-row input[type="date"] {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg, var(--card-bg));
+  color: var(--text);
+  font-size: 13px;
+}

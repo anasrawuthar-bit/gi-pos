@@ -190,6 +190,7 @@ type SavedOrder = {
   paymentBreakdown: PaymentBreakdown
   amountReceived: number
   totals: OrderTotals
+  taxExempt?: boolean
   creditApplied?: boolean
   createdAt: string
   updatedAt: string
@@ -735,6 +736,7 @@ function App() {
   const [discountPercent, setDiscountPercent] = useState(0)
   const [discountAmount, setDiscountAmount] = useState(0)
   const [servicePercent, setServicePercent] = useState(0)
+  const [taxExempt, setTaxExempt] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash')
   const [amountReceivedOverride, setAmountReceivedOverride] = useState<number | null>(null)
   const [partTenderMethod, setPartTenderMethod] = useState<PartTenderMethod>('upi')
@@ -755,6 +757,7 @@ function App() {
   const [orderListMode, setOrderListMode] = useState<OrderListMode | null>(null)
   const [orderListDate, setOrderListDate] = useState(() => formatDateInputValue(new Date()))
   const [reportOpen, setReportOpen] = useState(false)
+  const [reportPrintDate, setReportPrintDate] = useState(() => formatDateInputValue(new Date()))
   const [reportPeriodMode, setReportPeriodMode] = useState<ReportPeriodMode>('monthly')
   const [reportFromDate, setReportFromDate] = useState(() => formatDateInputValue(startOfMonth(new Date())))
   const [reportToDate, setReportToDate] = useState(() => formatDateInputValue(new Date()))
@@ -1131,14 +1134,16 @@ function App() {
     const subtotal = cart.reduce((sum, line) => sum + lineTotal(line), 0)
     const discount = getDiscountValue(subtotal, discountMode, discountPercent, discountAmount)
     const taxable = subtotal - discount
-    const tax = isInclusive
-      ? roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * line.taxRate) / (100 + line.taxRate), 0))
-      : roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * line.taxRate) / 100, 0))
+    const tax = taxExempt
+      ? 0
+      : isInclusive
+        ? roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * line.taxRate) / (100 + line.taxRate), 0))
+        : roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * line.taxRate) / 100, 0))
     const serviceCharge = roundMoney((taxable * servicePercent) / 100)
     const total = roundMoney(Math.max(0, isInclusive ? taxable + serviceCharge : taxable + tax + serviceCharge))
 
     return { subtotal, discount, tax, serviceCharge, total }
-  }, [cart, discountAmount, discountMode, discountPercent, servicePercent, businessProfile.gstType])
+  }, [cart, discountAmount, discountMode, discountPercent, servicePercent, businessProfile.gstType, taxExempt])
 
   const cashReceived =
     paymentMethod === 'Cash' || paymentMethod === 'Part'
@@ -3476,6 +3481,7 @@ function App() {
     setDiscountPercent(0)
     setDiscountAmount(0)
     setServicePercent(0)
+    setTaxExempt(false)
     setSelectedCustomerId('')
     setCustomer('')
     setCustomerPhone('')
@@ -3517,6 +3523,7 @@ function App() {
       discountPercent,
       discountAmount,
       servicePercent,
+      taxExempt,
       paymentMethod,
       paymentBreakdown,
       amountReceived,
@@ -3597,6 +3604,7 @@ function App() {
     setDiscountPercent(order.discountPercent)
     setDiscountAmount(order.discountAmount ?? 0)
     setServicePercent(order.servicePercent)
+    setTaxExempt(order.taxExempt ?? false)
     setPaymentMethod(order.paymentMethod)
     setAmountReceivedOverride(order.paymentBreakdown?.cash ?? order.amountReceived)
     setPartTenderMethod((order.paymentBreakdown?.card ?? 0) > (order.paymentBreakdown?.upi ?? 0) ? 'card' : 'upi')
@@ -4371,6 +4379,7 @@ function App() {
       discountPercent,
       discountAmount,
       tax: totals.tax,
+      taxExempt,
       serviceCharge: totals.serviceCharge,
       total: totals.total,
       paid: totals.paid,
@@ -4432,25 +4441,56 @@ function App() {
     }
   }
 
-  async function printTodayReport() {
+  async function printSelectedDateReport() {
     if (!requirePermission('reports', 'Report permission required')) {
       return
     }
 
-    const todayPeriod = getTodayReportPeriod(new Date())
-    const todayReport = buildReport(savedOrders, todayPeriod, expenses)
-    const payload = buildReportPrintPayload(todayReport, todayPeriod, 'Today Sales Report')
+    const printDate = parseDateInputValue(reportPrintDate, new Date())
+    const dailyPeriod = getDailyReportPeriod(printDate)
+    const dailyReport = buildReport(savedOrders, dailyPeriod, expenses)
+    const isToday = formatDateInputValue(printDate) === formatDateInputValue(new Date())
+    const title = isToday ? 'Today Sales Report' : `Daily Sales Report - ${formatDate(printDate)}`
+    const payload = buildReportPrintPayload(dailyReport, dailyPeriod, title)
 
     try {
-      setPrinterStatus('Printing today report...')
+      setPrinterStatus('Printing report...')
       if (window.posPrinter?.printReport) {
         await window.posPrinter.printReport(payload)
-        setPrinterStatus('Today report sent to bill printer')
+        setPrinterStatus('Report sent to bill printer')
         return
       }
 
       printReportInBrowser(payload)
-      setPrinterStatus('Today report opened for printing')
+      setPrinterStatus('Report opened for printing')
+    } catch (error) {
+      setPrinterStatus(getErrorMessage(error))
+    }
+  }
+
+  async function printPreviousDayReport() {
+    if (!requirePermission('reports', 'Report permission required')) {
+      return
+    }
+
+    const yesterday = addDays(new Date(), -1)
+    const yesterdayDateValue = formatDateInputValue(yesterday)
+    setReportPrintDate(yesterdayDateValue)
+    const yesterdayPeriod = getDailyReportPeriod(yesterday)
+    const yesterdayReport = buildReport(savedOrders, yesterdayPeriod, expenses)
+    const title = `Previous Day Report - ${formatDate(yesterday)}`
+    const payload = buildReportPrintPayload(yesterdayReport, yesterdayPeriod, title)
+
+    try {
+      setPrinterStatus('Printing previous day report...')
+      if (window.posPrinter?.printReport) {
+        await window.posPrinter.printReport(payload)
+        setPrinterStatus('Previous day report sent to bill printer')
+        return
+      }
+
+      printReportInBrowser(payload)
+      setPrinterStatus('Previous day report opened for printing')
     } catch (error) {
       setPrinterStatus(getErrorMessage(error))
     }
@@ -5013,10 +5053,22 @@ function App() {
               <p>{billingDisplayName} - {periodReport.periodLabel}</p>
             </div>
             <div className="page-head-actions">
-              <button className="home-action" type="button" onClick={printTodayReport}>
-                <Printer size={18} />
-                Print Today's Report
-              </button>
+              <div className="report-print-date-row">
+                <input
+                  type="date"
+                  value={reportPrintDate}
+                  onChange={(event) => setReportPrintDate(event.currentTarget.value)}
+                  title="Select date for report print"
+                />
+                <button className="home-action" type="button" onClick={printSelectedDateReport}>
+                  <Printer size={18} />
+                  Print Selected Date
+                </button>
+                <button className="home-action" type="button" onClick={printPreviousDayReport} title="Print yesterday's sales report">
+                  <Printer size={18} />
+                  Yesterday
+                </button>
+              </div>
               <button className="home-action primary" type="button" onClick={() => goToView('pos')}>
                 <ShoppingCart size={18} />
                 POS Sale
@@ -6671,7 +6723,12 @@ function App() {
                       <strong>-{money(totals.discount)}</strong>
                     </div>
                   )}
-                  {totals.tax > 0 && (
+                  {taxExempt ? (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: '#16a34a' }}>
+                      <span>Tax</span>
+                      <strong>Exempt</strong>
+                    </div>
+                  ) : totals.tax > 0 && (
                     <>
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                         <span>CGST</span>
@@ -6687,6 +6744,18 @@ function App() {
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span>Service Charge</span>
                       <strong>{money(totals.serviceCharge)}</strong>
+                    </div>
+                  )}
+                  {businessProfile.defaultGstRate > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '12px' }}>
+                        <input
+                          type="checkbox"
+                          checked={taxExempt}
+                          onChange={(e) => setTaxExempt(e.currentTarget.checked)}
+                        />
+                        Tax Exempt
+                      </label>
                     </div>
                   )}
                 </div>
@@ -6852,24 +6921,6 @@ function App() {
                 </div>
               )}
             </div>
-
-            <div className="success-items">
-              {successOrder.cart.slice(0, 5).map((line) => (
-                <div className="success-line" key={line.id}>
-                  <span>
-                    {line.name} x {line.qty}
-                  </span>
-                  <strong>{money(lineTotal(line))}</strong>
-                </div>
-              ))}
-              {successOrder.cart.length > 5 && (
-                <div className="success-line">
-                  <span>More items</span>
-                  <strong>{successOrder.cart.length - 5}</strong>
-                </div>
-              )}
-            </div>
-
             <div className="panel-actions">
               <button
                 className="small-button"
@@ -8748,12 +8799,12 @@ function getReportPeriod(
   return { mode, from, to, label: `${formatDate(from)} to ${formatDate(to)}` }
 }
 
-function getTodayReportPeriod(value: Date): ReportPeriod {
+function getDailyReportPeriod(value: Date): ReportPeriod {
   return {
     mode: 'custom',
     from: startOfDay(value),
     to: endOfDay(value),
-    label: `Today - ${formatDate(value)}`,
+    label: `Date - ${formatDate(value)}`,
   }
 }
 
