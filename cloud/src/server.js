@@ -7,6 +7,7 @@ const { createPool } = require('./db');
 const PORT = Number(process.env.PORT || 8080);
 const ADMIN_TOKEN = process.env.GI_CLOUD_ADMIN_TOKEN || '';
 const CLIENT_TOKEN_SECRET = process.env.GI_CLIENT_TOKEN_SECRET || ADMIN_TOKEN || 'gi-pos-local-client-secret';
+const OFFLINE_LICENSE_SECRET = process.env.GI_OFFLINE_LICENSE_SECRET || ADMIN_TOKEN || 'gi-pos-local-offline-secret';
 const UPDATE_DIR = process.env.GI_UPDATE_DIR || path.join(__dirname, '..', 'updates', 'win');
 const DEFAULT_PAIRING_MINUTES = 30;
 const UNLIMITED_DEVICE_LIMIT = 999999;
@@ -45,6 +46,20 @@ const PLAN_CATALOG = [
       'Other PCs and mobile devices can work through Main PC on LAN',
       'Cloud backup and restore',
       'Client portal, app download, and staff PIN reset',
+    ],
+  },
+  {
+    id: 'offline',
+    name: 'Offline',
+    subtitle: 'Single PC local POS',
+    maxDevices: 1,
+    counterLabel: '1 offline PC',
+    localPos: false,
+    features: [
+      'One Windows billing counter',
+      'One-time cloud activation and restore',
+      'Local SQLite billing after activation',
+      'No cloud backup, local POS server, or QR order portal',
     ],
   },
 ];
@@ -480,6 +495,7 @@ async function handleClientDeviceActivate(request, response, context, restaurant
   const body = await readJson(request);
   const deviceName = String(body.deviceName || MAIN_APP_DEVICE_NAME).trim() || MAIN_APP_DEVICE_NAME;
   const transferCode = String(body.transferCode || '').replace(/\D/g, '');
+  const deviceFingerprint = String(body.deviceFingerprint || '').trim();
 
   if (transferCode && !/^\d{6}$/.test(transferCode)) {
     sendJson(response, 400, { ok: false, error: 'Valid 6 digit transfer code is required' });
@@ -520,6 +536,8 @@ async function handleClientDeviceActivate(request, response, context, restaurant
       sendJson(response, 402, { ok: false, error: 'Subscription is not active or expired' });
       return;
     }
+    const decoratedSubscription = decorateSubscription(subscription);
+    const activationMode = decoratedSubscription.plan_id === 'offline' ? 'offline' : 'cloud';
 
     let transferPairing = null;
     let loggedOutDevices = [];
@@ -582,14 +600,30 @@ async function handleClientDeviceActivate(request, response, context, restaurant
       ]);
     }
 
+    const offlineLicense =
+      activationMode === 'offline'
+        ? createOfflineLicensePayload({
+            id: subscription.id,
+            licenseKey: `GI-${decoratedSubscription.plan_id.toUpperCase()}-${String(restaurant.id).slice(0, 8).toUpperCase()}`,
+            businessName: restaurant.name,
+            phone: restaurant.phone,
+            deviceFingerprint: deviceFingerprint || String(device.id),
+            deviceName: device.name,
+            activatedAt: new Date().toISOString(),
+            expiresAt: subscription.expires_at ? new Date(subscription.expires_at).toISOString() : '',
+            subscription: decoratedSubscription,
+          })
+        : null;
+
     await client.query('COMMIT');
 
     sendJson(response, 201, {
       ok: true,
       restaurant,
       device,
-      subscription: decorateSubscription(subscription),
+      subscription: decoratedSubscription,
       apiKey,
+      offlineLicense,
       transferApplied: Boolean(transferPairing),
       loggedOutDevices,
     });
@@ -1554,6 +1588,45 @@ function createRecoveryCode() {
   return `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8, 12)}`;
 }
 
+function signOfflineLicensePayload(payload) {
+  const stablePayload = JSON.stringify(Object.keys(payload).sort().reduce((acc, key) => {
+    acc[key] = payload[key];
+    return acc;
+  }, {}));
+  return crypto.createHmac('sha256', OFFLINE_LICENSE_SECRET).update(stablePayload).digest('hex');
+}
+
+function createOfflineLicensePayload({
+  id,
+  licenseKey,
+  businessName,
+  phone,
+  deviceFingerprint,
+  deviceName,
+  activatedAt,
+  expiresAt,
+  subscription,
+}) {
+  const payload = {
+    plan: 'offline',
+    licenseId: String(id || ''),
+    licenseKey: String(licenseKey || ''),
+    businessName: String(businessName || ''),
+    phone: String(phone || ''),
+    deviceFingerprint: String(deviceFingerprint || ''),
+    deviceName: String(deviceName || ''),
+    activatedAt: String(activatedAt || ''),
+    expiresAt: String(expiresAt || ''),
+    issuedAt: new Date().toISOString(),
+    subscriptionPlan: String(subscription?.plan_name || subscription?.planName || ''),
+    subscriptionStatus: String(subscription?.status || ''),
+    subscriptionExpiresAt: String(subscription?.expires_at || expiresAt || ''),
+    subscriptionMaxDevices: Number(subscription?.max_devices || 0),
+  };
+
+  return { ...payload, signature: signOfflineLicensePayload(payload) };
+}
+
 function normalizeRecoveryCode(value) {
   const cleaned = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   return cleaned.length === 12 ? `${cleaned.slice(0, 4)}-${cleaned.slice(4, 8)}-${cleaned.slice(8, 12)}` : cleaned;
@@ -1667,6 +1740,10 @@ function normalizePlanId(value, maxDevices = 0) {
 
   if (planText.includes('premium')) {
     return 'premium';
+  }
+
+  if (planText.includes('offline')) {
+    return 'offline';
   }
 
   if (Number(maxDevices || 0) >= UNLIMITED_DEVICE_LIMIT) {
@@ -3297,7 +3374,7 @@ const ADMIN_HTML = `<!doctype html>
           <div>
             <span class="eyebrow">Plan Cards</span>
             <h2>Subscription Plans</h2>
-            <p>Premium is one counter. Gold is for Main PC local POS server, mobile, and extra local counters.</p>
+            <p>Premium is one counter. Gold is for Main PC local POS server. During desktop activation, either plan can run in Cloud or Offline mode.</p>
           </div>
           <div class="admin-note-row">
             <span>Yearly default</span>

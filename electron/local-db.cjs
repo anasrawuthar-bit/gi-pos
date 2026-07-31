@@ -4,26 +4,33 @@ const crypto = require('node:crypto');
 const initSqlJs = require('sql.js');
 
 const DB_FILE_NAME = 'gi-pos-local.sqlite';
+const DATA_DIR_NAME = 'GIPOS Restaurant';
+const BACKUP_DIR_NAME = 'Backups';
+const MAX_AUTO_BACKUPS = 30;
 const SYNCABLE_KV_KEYS = new Set([
   'pos-business-profile',
   'pos-categories',
   'pos-customers',
   'pos-expenses',
   'pos-menu-items',
+  'pos-opening-cash-balances',
   'pos-orders',
   'pos-staff-users',
   'pos-staff-user-directory',
 ]);
 
 async function createLocalDatabase(app) {
-  const dataDir = path.join(app.getPath('userData'), 'data');
+  const dataDir = getPersistentDataDir(app);
+  const backupDir = path.join(dataDir, BACKUP_DIR_NAME);
   const dbPath = path.join(dataDir, DB_FILE_NAME);
   fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(backupDir, { recursive: true });
+  migrateLegacyDatabase(app, dbPath, backupDir);
 
   const SQL = await initSqlJs({
     locateFile: (file) => require.resolve(`sql.js/dist/${file}`),
   });
-  const db = fs.existsSync(dbPath) ? new SQL.Database(fs.readFileSync(dbPath)) : new SQL.Database();
+  let db = openDatabaseWithBackupFallback(SQL, dbPath, backupDir);
 
   db.run(`
     PRAGMA user_version = 1;
@@ -48,9 +55,12 @@ async function createLocalDatabase(app) {
   `);
 
   persistDatabase(db, dbPath);
+  createDatabaseBackup(dbPath, backupDir, 'startup');
 
   return {
     path: dbPath,
+    dataDir,
+    backupDir,
     getSnapshot() {
       const values = {};
       const result = db.exec('SELECT key, value FROM app_kv ORDER BY key');
@@ -64,6 +74,8 @@ async function createLocalDatabase(app) {
       return {
         engine: 'sqlite',
         path: dbPath,
+        dataDir,
+        backupDir,
         values,
       };
     },
@@ -213,6 +225,7 @@ async function createLocalDatabase(app) {
     },
     resetAll() {
       const now = new Date().toISOString();
+      createDatabaseBackup(dbPath, backupDir, 'before-reset');
       db.run('BEGIN TRANSACTION');
 
       try {
@@ -228,7 +241,30 @@ async function createLocalDatabase(app) {
 
       return { ok: true, updatedAt: now };
     },
+    createBackup() {
+      const backup = createDatabaseBackup(dbPath, backupDir, 'manual');
+      return { ok: true, path: backup.path, fileName: backup.fileName, updatedAt: new Date().toISOString() };
+    },
+    listBackups() {
+      return { ok: true, backups: listDatabaseBackups(backupDir) };
+    },
+    restoreBackup(fileName) {
+      const backupPath = resolveBackupPath(backupDir, fileName);
+      if (!backupPath) {
+        throw new Error('Backup file not found');
+      }
+
+      createDatabaseBackup(dbPath, backupDir, 'before-restore');
+      const nextDb = new SQL.Database(fs.readFileSync(backupPath));
+      nextDb.run('SELECT name FROM sqlite_master LIMIT 1');
+      db.close();
+      db = nextDb;
+      persistDatabase(db, dbPath);
+
+      return { ok: true, path: dbPath, restoredFrom: backupPath, updatedAt: new Date().toISOString() };
+    },
     close() {
+      createDatabaseBackup(dbPath, backupDir, 'close');
       persistDatabase(db, dbPath);
       db.close();
     },
@@ -237,7 +273,124 @@ async function createLocalDatabase(app) {
 
 function persistDatabase(db, dbPath) {
   const data = Buffer.from(db.export());
-  fs.writeFileSync(dbPath, data);
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const tempPath = `${dbPath}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tempPath, data);
+  fs.renameSync(tempPath, dbPath);
+}
+
+function getPersistentDataDir(app) {
+  if (process.env.GI_POS_DATA_DIR) {
+    return path.resolve(process.env.GI_POS_DATA_DIR);
+  }
+
+  if (process.platform === 'win32') {
+    return path.join('C:\\', DATA_DIR_NAME);
+  }
+
+  return path.join(app.getPath('documents'), DATA_DIR_NAME);
+}
+
+function migrateLegacyDatabase(app, dbPath, backupDir) {
+  if (fs.existsSync(dbPath)) {
+    return;
+  }
+
+  const legacyPath = path.join(app.getPath('userData'), 'data', DB_FILE_NAME);
+  if (!fs.existsSync(legacyPath)) {
+    const latestBackup = listDatabaseBackups(backupDir)[0];
+    if (latestBackup) {
+      fs.copyFileSync(latestBackup.path, dbPath);
+    }
+    return;
+  }
+
+  fs.copyFileSync(legacyPath, dbPath);
+  createDatabaseBackup(dbPath, backupDir, 'legacy-migrated');
+}
+
+function openDatabaseWithBackupFallback(SQL, dbPath, backupDir) {
+  if (fs.existsSync(dbPath)) {
+    try {
+      return new SQL.Database(fs.readFileSync(dbPath));
+    } catch {
+      createCorruptCopy(dbPath, backupDir);
+    }
+  }
+
+  const latestBackup = listDatabaseBackups(backupDir)[0];
+  if (latestBackup) {
+    fs.copyFileSync(latestBackup.path, dbPath);
+    return new SQL.Database(fs.readFileSync(dbPath));
+  }
+
+  return new SQL.Database();
+}
+
+function createDatabaseBackup(dbPath, backupDir, reason) {
+  if (!fs.existsSync(dbPath)) {
+    return { path: '', fileName: '' };
+  }
+
+  fs.mkdirSync(backupDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-');
+  const safeReason = String(reason || 'backup').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+  const fileName = `gi-pos-${safeReason}-${stamp}.sqlite`;
+  const backupPath = path.join(backupDir, fileName);
+  fs.copyFileSync(dbPath, backupPath);
+  pruneAutoBackups(backupDir);
+  return { path: backupPath, fileName };
+}
+
+function createCorruptCopy(dbPath, backupDir) {
+  try {
+    fs.mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-');
+    fs.copyFileSync(dbPath, path.join(backupDir, `gi-pos-corrupt-${stamp}.sqlite`));
+  } catch {
+    // Keep startup moving; the backup fallback handles recovery.
+  }
+}
+
+function listDatabaseBackups(backupDir) {
+  if (!fs.existsSync(backupDir)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(backupDir)
+    .filter((fileName) => fileName.toLowerCase().endsWith('.sqlite'))
+    .map((fileName) => {
+      const filePath = path.join(backupDir, fileName);
+      const stat = fs.statSync(filePath);
+      return {
+        fileName,
+        path: filePath,
+        size: stat.size,
+        createdAt: stat.birthtime.toISOString(),
+        updatedAt: stat.mtime.toISOString(),
+      };
+    })
+    .sort((first, second) => new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime());
+}
+
+function pruneAutoBackups(backupDir) {
+  const backups = listDatabaseBackups(backupDir).filter((backup) => !backup.fileName.includes('manual'));
+  backups.slice(MAX_AUTO_BACKUPS).forEach((backup) => {
+    try {
+      fs.unlinkSync(backup.path);
+    } catch {
+      // Old backup cleanup is best effort only.
+    }
+  });
+}
+
+function resolveBackupPath(backupDir, fileName) {
+  const safeName = path.basename(String(fileName || ''));
+  const backupRoot = path.resolve(backupDir);
+  const backupPath = path.resolve(backupRoot, safeName);
+  const isInsideBackupDir = backupPath === backupRoot || backupPath.startsWith(`${backupRoot}${path.sep}`);
+  return isInsideBackupDir && fs.existsSync(backupPath) ? backupPath : '';
 }
 
 function insertOutboxEvent(db, entityType, entityId, operation, payload, createdAt) {
@@ -279,6 +432,9 @@ function registerLocalDatabaseHandlers(ipcMain, getDatabase) {
   ipcMain.handle('db:sync-clear-pending', async () => getDatabase().clearPendingSync());
   ipcMain.handle('db:apply-remote-values', async (_event, entries) => getDatabase().applyRemoteValues(entries));
   ipcMain.handle('db:reset-all', async () => getDatabase().resetAll());
+  ipcMain.handle('db:backup-create', async () => getDatabase().createBackup());
+  ipcMain.handle('db:backup-list', async () => getDatabase().listBackups());
+  ipcMain.handle('db:backup-restore', async (_event, fileName) => getDatabase().restoreBackup(String(fileName || '')));
 }
 
 module.exports = {

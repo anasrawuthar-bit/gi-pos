@@ -122,7 +122,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": true,
+      "deleteAppDataOnUninstall": false,
       "installerIcon": "public/app_icon.ico",
       "uninstallerIcon": "public/app_icon.ico",
       "installerSidebar": "build/installerSidebar.bmp",

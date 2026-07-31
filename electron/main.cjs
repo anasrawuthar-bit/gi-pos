@@ -1,7 +1,8 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('node:path');
 const net = require('node:net');
+const fs = require('node:fs/promises');
 const { createLocalDatabase, registerLocalDatabaseHandlers } = require('./local-db.cjs');
 const { createLanServer, registerLanServerHandlers } = require('./lan-server.cjs');
 
@@ -55,11 +56,13 @@ app.whenReady().then(async () => {
   app.setName(APP_NAME);
   localDatabase = await createLocalDatabase(app);
   registerLocalDatabaseHandlers(ipcMain, () => localDatabase);
-  lanServer = await createLanServer({
-    app,
-    getDatabase: () => localDatabase,
-    printKot: printKotFromLanServer,
-  });
+  if (shouldStartLanServer(localDatabase)) {
+    lanServer = await createLanServer({
+      app,
+      getDatabase: () => localDatabase,
+      printKot: printKotFromLanServer,
+    });
+  }
   registerLanServerHandlers(ipcMain, () => lanServer);
   registerUpdaterHandlers();
   createWindow();
@@ -130,6 +133,15 @@ function registerUpdaterHandlers() {
   });
 }
 
+ipcMain.handle('lan-server:stop', async () => {
+  if (lanServer) {
+    await lanServer.close();
+    lanServer = null;
+  }
+
+  return { ok: true };
+});
+
 function setupAutoUpdater() {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -186,6 +198,28 @@ function canUseAutoUpdater() {
   return app.isPackaged && process.platform === 'win32';
 }
 
+function shouldStartLanServer(database) {
+  try {
+    const snapshot = database?.getSnapshot?.();
+    const appMode = parseJsonValue(snapshot?.values?.['pos-app-mode'], 'cloud');
+    return appMode !== 'offline';
+  } catch {
+    return true;
+  }
+}
+
+function parseJsonValue(value, fallback) {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value || fallback;
+  }
+}
+
 function setUpdateStatus(state, message, extra = {}) {
   updateStatus = {
     ...updateStatus,
@@ -212,6 +246,15 @@ function pickUpdateInfo(info = {}) {
 
 function getUpdateErrorMessage(error) {
   return error?.message || 'Update check failed';
+}
+
+function sanitizeFileName(value) {
+  const cleaned = String(value || '')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return cleaned || 'GI POS Report.pdf';
 }
 
 ipcMain.handle('receipt:print', async (_event, payload) => {
@@ -269,6 +312,28 @@ ipcMain.handle('report:print', async (_event, payload) => {
 
   await printSystemReport(payload);
   return { ok: true, mode: 'system' };
+});
+
+ipcMain.handle('report:export-pdf', async (_event, payload) => {
+  const html = String(payload?.html || '');
+  const defaultFileName = sanitizeFileName(String(payload?.defaultFileName || 'GI POS Report.pdf'));
+
+  if (!html.trim()) {
+    throw new Error('Report content is empty');
+  }
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export Report PDF',
+    defaultPath: defaultFileName.endsWith('.pdf') ? defaultFileName : `${defaultFileName}.pdf`,
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+  });
+
+  if (result.canceled || !result.filePath) {
+    return { ok: false, canceled: true };
+  }
+
+  await exportHtmlToPdf(html, result.filePath);
+  return { ok: true, path: result.filePath };
 });
 
 ipcMain.handle('kot:print', async (_event, payload) => {
@@ -333,6 +398,49 @@ function printSystemKot(payload) {
 
 function printSystemReport(payload) {
   return printSystemHtml(payload, buildReportHtml(payload), 'Printer rejected the report print job');
+}
+
+function exportHtmlToPdf(html, filePath) {
+  return new Promise((resolve, reject) => {
+    const pdfWindow = new BrowserWindow({
+      width: 900,
+      height: 1200,
+      show: false,
+      webPreferences: {
+        sandbox: true,
+      },
+    });
+
+    pdfWindow.webContents.once('did-finish-load', async () => {
+      try {
+        const pdf = await pdfWindow.webContents.printToPDF({
+          printBackground: true,
+          margins: {
+            marginType: 'custom',
+            top: 0.35,
+            bottom: 0.35,
+            left: 0.35,
+            right: 0.35,
+          },
+          pageSize: 'A4',
+          landscape: false,
+        });
+        await fs.writeFile(filePath, pdf);
+        pdfWindow.close();
+        resolve();
+      } catch (error) {
+        pdfWindow.close();
+        reject(error);
+      }
+    });
+
+    pdfWindow.webContents.once('did-fail-load', (_event, _errorCode, errorDescription) => {
+      pdfWindow.close();
+      reject(new Error(errorDescription || 'Failed to render report PDF'));
+    });
+
+    pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  });
 }
 
 function printSystemHtml(payload, html, rejectionMessage) {
@@ -702,6 +810,7 @@ function buildReportHtml(payload) {
         <table>
           <tr class="grand"><td>Total Sales</td><td>${money(report.salesTotal)}</td></tr>
           <tr><td>Paid Bills</td><td>${Number(report.paidCount || 0)}</td></tr>
+          <tr><td>Opening Cash</td><td>${money(report.openingCash)}</td></tr>
           <tr><td>Cash In Hand</td><td>${money(report.cashInHand)}</td></tr>
           <tr><td>UPI</td><td>${money(report.upiTotal)}</td></tr>
           <tr><td>Card</td><td>${money(report.cardTotal)}</td></tr>
@@ -923,6 +1032,7 @@ function buildEscPosReport(payload) {
   text(parts, twoCol('Total Sales', money(report.salesTotal), columns));
   bold(parts, false);
   text(parts, twoCol('Paid Bills', String(Number(report.paidCount || 0)), columns));
+  text(parts, twoCol('Opening Cash', money(report.openingCash), columns));
   text(parts, twoCol('Cash In Hand', money(report.cashInHand), columns));
   text(parts, twoCol('UPI', money(report.upiTotal), columns));
   text(parts, twoCol('Card', money(report.cardTotal), columns));

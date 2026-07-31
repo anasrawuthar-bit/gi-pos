@@ -2412,9 +2412,64 @@ button {
   color: #111827;
 }
 
+.orders-total-summary {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.orders-total-summary span,
+.orders-total-summary small,
+.orders-select-toolbar span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.orders-total-summary strong,
+.orders-select-toolbar strong {
+  color: #111827;
+  font-size: 16px;
+}
+
+.orders-select-toolbar {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 9px 10px;
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-radius: 7px;
+}
+
+.orders-select-toolbar label,
+.order-select-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.orders-select-toolbar input,
+.order-select-cell input {
+  width: 17px;
+  height: 17px;
+  accent-color: #0f8b94;
+}
+
+.orders-select-toolbar > div {
+  display: grid;
+  justify-items: end;
+  gap: 1px;
+}
+
 .saved-order {
   display: grid;
-  grid-template-columns: minmax(160px, 1.4fr) 90px 70px 100px 80px 44px;
+  grid-template-columns: 32px minmax(160px, 1.4fr) 90px 70px 100px 80px;
   align-items: center;
   gap: 8px;
   padding: 9px;
@@ -2422,6 +2477,11 @@ button {
   border: 1px solid #d7dce3;
   border-left: 5px solid #94a3b8;
   border-radius: 6px;
+}
+
+.saved-order:has(.order-select-cell input:checked) {
+  border-color: #0f8b94;
+  background: #ecfeff;
 }
 
 .saved-order.unclosed {
@@ -2983,6 +3043,7 @@ button {
 .pos-shell .payment,
 .pos-shell .credit-hint,
 .pos-shell .orders-date-filter,
+.pos-shell .orders-select-toolbar,
 .pos-shell .customer-search-box,
 .pos-shell .customer-search-panel,
 .pos-shell .customer-detail-panel,
@@ -3028,6 +3089,24 @@ button {
 
 .pos-shell .orders-date-filter label {
   color: var(--text-muted);
+}
+
+.pos-shell .orders-total-summary span,
+.pos-shell .orders-total-summary small,
+.pos-shell .orders-select-toolbar span {
+  color: var(--text-muted);
+}
+
+.pos-shell .orders-total-summary strong,
+.pos-shell .orders-select-toolbar strong,
+.pos-shell .orders-select-toolbar label,
+.pos-shell .order-select-cell {
+  color: var(--text);
+}
+
+.pos-shell .saved-order:has(.order-select-cell input:checked) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
 }
 
 .pos-shell .open-price-card span {
@@ -3921,8 +4000,156 @@ button {
   font-size: 14px;
 }
 
+.pos-shell .report-export-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  box-shadow: none;
+}
+
+.pos-shell .report-export-panel > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.pos-shell .report-export-panel strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.pos-shell .report-export-panel span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.pos-shell .report-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .pos-shell .report-grid.detailed {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.pos-shell .daily-cash-desk {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+  box-shadow: none;
+}
+
+.pos-shell .daily-opening-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) minmax(180px, 260px) auto;
+  align-items: end;
+  justify-content: start;
+  gap: 10px;
+}
+
+.pos-shell .daily-opening-row label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.pos-shell .daily-opening-row input {
+  height: 40px;
+  color: var(--text);
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 900;
+  outline: none;
+}
+
+.pos-shell .daily-opening-row input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus);
+}
+
+.pos-shell .opening-cash-preview {
+  display: grid;
+  gap: 4px;
+  padding: 9px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.pos-shell .opening-cash-preview span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.pos-shell .opening-cash-preview strong {
+  color: var(--text);
+  font-size: 18px;
+}
+
+.pos-shell .daily-cash-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pos-shell .daily-cash-card {
+  min-height: 124px;
+  display: grid;
+  align-content: space-between;
+  gap: 8px;
+  padding: 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.pos-shell .daily-cash-card.total {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+}
+
+.pos-shell .daily-cash-card.cash {
+  background: color-mix(in srgb, var(--success) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--success) 30%, var(--border));
+}
+
+.pos-shell .daily-cash-card.bank {
+  background: color-mix(in srgb, #2563eb 10%, var(--surface));
+  border-color: color-mix(in srgb, #2563eb 30%, var(--border));
+}
+
+.pos-shell .daily-cash-card span,
+.pos-shell .daily-cash-card small {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.pos-shell .daily-cash-card strong {
+  color: var(--text);
+  font-size: 34px;
+  line-height: 1;
+}
+
+.pos-shell .daily-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pos-shell .report-grid.detailed.clean {
+  margin-top: 12px;
 }
 
 .pos-shell .report-card {
@@ -5290,6 +5517,120 @@ button {
   gap: 8px;
 }
 
+.pos-shell .database-safety-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.pos-shell .license-details-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.pos-shell .database-safety-panel > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.pos-shell .license-details-panel > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.pos-shell .database-safety-panel strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.pos-shell .license-details-panel strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.pos-shell .database-safety-panel span,
+.pos-shell .database-safety-panel small {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.pos-shell .license-details-panel span,
+.pos-shell .license-details-panel small {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.pos-shell .license-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pos-shell .license-detail-grid div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.pos-shell .license-detail-grid strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pos-shell .database-path-list {
+  display: grid;
+  gap: 6px;
+}
+
+.pos-shell .database-path-list div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pos-shell .database-path-list strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pos-shell .database-backup-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.pos-shell .database-backup-row select {
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .pos-shell .update-progress {
   height: 8px;
   overflow: hidden;
@@ -5306,28 +5647,181 @@ button {
 
 .pos-shell .about-layout {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.pos-shell .about-hero-card {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 138px;
+  color: #fff;
+  background:
+    linear-gradient(135deg, rgba(204, 13, 45, 0.92), rgba(7, 132, 142, 0.96)),
+    var(--surface);
+  border-color: transparent;
+  overflow: hidden;
+}
+
+.pos-shell .about-hero-brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.pos-shell .about-brand-mark {
+  width: 70px;
+  height: 70px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 18px 34px rgba(0, 0, 0, 0.2);
+  flex: 0 0 auto;
+}
+
+.pos-shell .about-hero-brand span,
+.pos-shell .about-hero-brand p,
+.pos-shell .about-hero-badges span {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.pos-shell .about-hero-brand h2 {
+  margin: 2px 0 4px;
+  color: #fff;
+  font-size: 30px;
+  line-height: 1.05;
+}
+
+.pos-shell .about-hero-brand p {
+  margin: 0;
+}
+
+.pos-shell .about-hero-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.pos-shell .about-hero-badges span {
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 7px;
+}
+
+.pos-shell .about-hero-badges .good {
+  color: #064e3b;
+  background: #d1fae5;
+  border-color: #a7f3d0;
+}
+
+.pos-shell .about-hero-badges .warn {
+  color: #7f1d1d;
+  background: #fee2e2;
+  border-color: #fecaca;
+}
+
+.pos-shell .about-summary-grid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 
-.pos-shell .about-layout .app-about-card {
+.pos-shell .about-summary-grid article {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.pos-shell .about-summary-grid span,
+.pos-shell .about-summary-grid small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pos-shell .about-summary-grid strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pos-shell .refined-license-panel {
+  grid-column: 1 / span 8;
+  margin-top: 0;
+}
+
+.pos-shell .license-group-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pos-shell .license-group {
+  min-width: 0;
+  display: grid;
   align-content: start;
+  gap: 8px;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
 }
 
-.pos-shell .about-layout .about-company-card {
-  grid-column: auto;
+.pos-shell .license-group h4 {
+  margin: 0;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 1000;
+  text-transform: uppercase;
 }
 
-.pos-shell .about-layout .terms-card {
-  grid-column: 1 / -1;
+.pos-shell .license-detail-row {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
 }
 
-.pos-shell .about-company-card {
-  grid-column: 1 / span 2;
+.pos-shell .license-detail-row span,
+.pos-shell .license-detail-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+.pos-shell .about-update-card {
+  grid-column: 9 / -1;
+  margin-top: 0;
+}
+
+.pos-shell .about-data-card {
+  grid-column: 9 / -1;
+  margin-top: 0;
+}
+
+.pos-shell .about-company-card,
 .pos-shell .terms-card {
-  grid-column: span 1;
+  grid-column: span 6;
 }
 
 .pos-shell .company-info-card p,
@@ -5372,7 +5866,9 @@ button {
   }
 
   .pos-shell .home-metrics,
-  .pos-shell .report-grid.detailed {
+  .pos-shell .report-grid.detailed,
+  .pos-shell .daily-cash-grid,
+  .pos-shell .daily-breakdown-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
@@ -5386,6 +5882,31 @@ button {
 
   .pos-shell .about-layout {
     grid-template-columns: 1fr;
+  }
+
+  .pos-shell .report-export-panel {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pos-shell .report-export-actions {
+    justify-content: flex-start;
+  }
+
+  .pos-shell .about-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pos-shell .refined-license-panel,
+  .pos-shell .about-update-card,
+  .pos-shell .about-data-card,
+  .pos-shell .about-company-card,
+  .pos-shell .terms-card {
+    grid-column: 1 / -1;
+  }
+
+  .pos-shell .license-group-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .pos-shell .sync-layout {
@@ -5412,6 +5933,8 @@ button {
   .pos-shell .report-control-panel,
   .pos-shell .report-chart-layout,
   .pos-shell .detail-report-layout,
+  .pos-shell .daily-cash-grid,
+  .pos-shell .daily-breakdown-grid,
   .pos-shell .printer-manager-layout,
   .pos-shell .table-setup-layout,
   .pos-shell .customer-workspace,
@@ -5424,6 +5947,28 @@ button {
   }
 
   .pos-shell .permission-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pos-shell .license-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pos-shell .about-hero-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .pos-shell .about-hero-badges {
+    justify-content: flex-start;
+  }
+
+  .pos-shell .about-summary-grid,
+  .pos-shell .license-group-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pos-shell .daily-opening-row {
     grid-template-columns: 1fr;
   }
 

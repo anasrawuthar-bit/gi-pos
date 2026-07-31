@@ -13,7 +13,6 @@ import {
   Heart,
   Home,
   ImagePlus,
-  Landmark,
   LogOut,
   Minus,
   Monitor,
@@ -43,6 +42,7 @@ import type { CSSProperties, DragEvent } from 'react'
 import './App.css'
 import type {
   AppUpdateStatus,
+  LocalDbBackup,
   LocalDbSnapshot,
   LocalDbSyncChange,
   LocalServerStatus,
@@ -54,6 +54,7 @@ type OrderType = 'Dining' | 'Delivery' | 'Take Away' | 'Online'
 type PaymentMethod = 'Cash' | 'UPI' | 'Card' | 'Due' | 'Part'
 type PartTenderMethod = 'upi' | 'card'
 type ThemeMode = 'light' | 'dark'
+type AppMode = 'cloud' | 'offline'
 type AppView = 'home' | 'pos' | 'reports' | 'expenses' | 'profile' | 'sync' | 'users' | 'network' | 'about'
 type ReportPeriodMode = 'custom' | 'monthly' | 'yearly'
 type DiscountMode = 'percent' | 'amount'
@@ -354,6 +355,7 @@ type CloudPairResponse = {
     max_devices?: number
   }
   apiKey?: string
+  offlineLicense?: OfflineLicense
   replacedOldDevice?: boolean
   transferApplied?: boolean
   loggedOutDevices?: Array<{
@@ -396,6 +398,24 @@ type CloudLoginResponse = {
 type CloudMeResponse = {
   account?: CloudLoginResponse['account']
   restaurants?: CloudClientRestaurant[]
+}
+
+type OfflineLicense = {
+  plan: 'offline'
+  licenseId: string
+  licenseKey: string
+  businessName: string
+  phone: string
+  deviceFingerprint: string
+  deviceName: string
+  activatedAt: string
+  expiresAt: string
+  issuedAt: string
+  signature: string
+  subscriptionPlan: string
+  subscriptionStatus: string
+  subscriptionExpiresAt: string
+  subscriptionMaxDevices: number
 }
 
 type CloudPullResponse = {
@@ -455,10 +475,14 @@ type ReportPrintPayload = {
       phone: string
     }
     salesTotal: number
+    receivedTotal: number
     paidCount: number
+    openingCash: number
+    cashReceivedTotal: number
     cashInHand: number
     upiTotal: number
     cardTotal: number
+    bankReceivedTotal: number
     bankTotal: number
     balanceTotal: number
     discountTotal: number
@@ -470,6 +494,17 @@ type ReportPrintPayload = {
     openCount: number
     orderTypeRows: ReportPrintRow[]
   }
+}
+
+type ReportExportData = {
+  reportData: ReturnType<typeof buildReport>
+  period: ReportPeriod
+  orders: SavedOrder[]
+  expenses: ExpenseEntry[]
+  businessProfile: BusinessProfile
+  businessName: string
+  generatedAt: string
+  openingCash: number
 }
 
 const defaultCategories: Category[] = [
@@ -578,12 +613,17 @@ const companyName = 'GI Hostings'
 const companyWebsite = 'https://www.gihostings.com'
 const staffDirectorySyncKey = 'pos-staff-user-directory'
 const staffPinResetCommandKey = 'pos-staff-pin-reset-commands'
+const openingCashStorageKey = 'pos-opening-cash-balances'
+const appModeStorageKey = 'pos-app-mode'
+const offlineLicenseStorageKey = 'pos-offline-license'
+const deviceFingerprintStorageKey = 'pos-device-fingerprint'
 const restaurantDataStorageKeys = [
   'pos-business-profile',
   'pos-categories',
   'pos-dining-table-groups',
   'pos-customers',
   'pos-menu-items',
+  openingCashStorageKey,
   'pos-expenses',
   'pos-qr-orders',
   'pos-orders',
@@ -592,6 +632,8 @@ const restaurantDataStorageKeys = [
   staffPinResetCommandKey,
   'pos-audit-log',
   'pos-cloud-sync-settings',
+  appModeStorageKey,
+  offlineLicenseStorageKey,
 ] as const
 const mainAppDeviceName = 'Main App'
 const companyWebsiteDisplay = 'gihostings.com'
@@ -612,6 +654,14 @@ const appPlanCatalog = {
     counterLabel: 'Main PC plus local counters',
     localPos: true,
     features: ['Main PC local POS server', 'Mobile / other PC LAN billing', 'Cloud backup and restore'],
+  },
+  offline: {
+    id: 'offline',
+    name: 'Offline',
+    subtitle: 'Single PC one-time activation',
+    counterLabel: 'Single Windows PC',
+    localPos: false,
+    features: ['Local SQLite billing', 'USB/System and LAN printer', 'No cloud backup or LAN POS server'],
   },
 } as const
 
@@ -706,6 +756,10 @@ function App() {
   const [cloudSyncSettings, setCloudSyncSettings] = useState<CloudSyncSettings>(() =>
     normalizeCloudSyncSettings(loadStoredObject('pos-cloud-sync-settings', defaultCloudSyncSettings)),
   )
+  const [appMode, setAppMode] = useState<AppMode>(() => normalizeAppMode(localStorage.getItem(appModeStorageKey)))
+  const [offlineLicense, setOfflineLicense] = useState<OfflineLicense | null>(() =>
+    normalizeOfflineLicense(loadStoredObject<Partial<OfflineLicense>>(offlineLicenseStorageKey, {})),
+  )
   const [staffUsers, setStaffUsers] = useState<StaffUser[]>(() =>
     normalizeStaffUsers(loadStoredArray('pos-staff-users', [])),
   )
@@ -716,6 +770,7 @@ function App() {
   const [currentDate, setCurrentDate] = useState(() => new Date())
   const [activeOrderId, setActiveOrderId] = useState(() => createOrderId())
   const [billNumber, setBillNumber] = useState(() => getInitialBillNumber(savedOrders))
+  const [billFinancialYear, setBillFinancialYear] = useState(() => getFinancialYearKey(new Date()))
   const [activeCategory, setActiveCategory] = useState('bread')
   const [activeQuickTag, setActiveQuickTag] = useState<ItemTag | null>(null)
   const [search, setSearch] = useState('')
@@ -756,6 +811,7 @@ function App() {
   const [discountEditorOpen, setDiscountEditorOpen] = useState(false)
   const [orderListMode, setOrderListMode] = useState<OrderListMode | null>(null)
   const [orderListDate, setOrderListDate] = useState(() => formatDateInputValue(new Date()))
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([])
   const [reportOpen, setReportOpen] = useState(false)
   const [reportPrintDate, setReportPrintDate] = useState(() => formatDateInputValue(new Date()))
   const [reportPeriodMode, setReportPeriodMode] = useState<ReportPeriodMode>('monthly')
@@ -763,6 +819,9 @@ function App() {
   const [reportToDate, setReportToDate] = useState(() => formatDateInputValue(new Date()))
   const [reportMonth, setReportMonth] = useState(() => formatMonthInputValue(new Date()))
   const [reportYear, setReportYear] = useState(() => String(new Date().getFullYear()))
+  const [openingCashBalances, setOpeningCashBalances] = useState<Record<string, number>>(() =>
+    normalizeOpeningCashBalances(loadStoredObject<Record<string, number>>(openingCashStorageKey, {})),
+  )
   const [lineActionId, setLineActionId] = useState<string | null>(null)
   const [lineEditor, setLineEditor] = useState<LineEditor | null>(null)
   const [pendingPriceItem, setPendingPriceItem] = useState<MenuItem | null>(null)
@@ -809,6 +868,11 @@ function App() {
   const [printerProfileName, setPrinterProfileName] = useState('')
   const [storageReady, setStorageReady] = useState(() => !hasDesktopDataStore())
   const [localDatabasePath, setLocalDatabasePath] = useState('')
+  const [localDatabaseDataDir, setLocalDatabaseDataDir] = useState('')
+  const [localDatabaseBackupDir, setLocalDatabaseBackupDir] = useState('')
+  const [databaseBackups, setDatabaseBackups] = useState<LocalDbBackup[]>([])
+  const [selectedDatabaseBackup, setSelectedDatabaseBackup] = useState('')
+  const [databaseBackupStatus, setDatabaseBackupStatus] = useState('Database backup ready')
   const [localServerStatus, setLocalServerStatus] = useState<LocalServerStatus | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState('Cloud sync not configured')
@@ -865,6 +929,21 @@ function App() {
       })
     }
   }, [localDatabasePath])
+  const refreshDatabaseBackups = useCallback(async () => {
+    if (!window.posDb?.listBackups) {
+      setDatabaseBackups([])
+      return
+    }
+
+    try {
+      const result = await window.posDb.listBackups()
+      const backups = result.backups ?? []
+      setDatabaseBackups(backups)
+      setSelectedDatabaseBackup((current) => (current && backups.some((backup) => backup.fileName === current) ? current : backups[0]?.fileName ?? ''))
+    } catch (error) {
+      setDatabaseBackupStatus(`Backup list failed: ${getErrorMessage(error)}`)
+    }
+  }, [])
   const [currentUserId, setCurrentUserId] = useState('')
   const [loginUserId, setLoginUserId] = useState('')
   const [loginPin, setLoginPin] = useState('')
@@ -976,6 +1055,20 @@ function App() {
 
     return [...orders].sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime())
   }, [orderListMode, savedOrders, selectedOrderListDay])
+  const visibleOrderIds = useMemo(() => visibleOrders.map((order) => order.id), [visibleOrders])
+  const visibleOrdersTotal = useMemo(
+    () => roundMoney(visibleOrders.reduce((sum, order) => sum + order.totals.total, 0)),
+    [visibleOrders],
+  )
+  const selectedVisibleOrders = useMemo(
+    () => visibleOrders.filter((order) => selectedOrderIds.includes(order.id)),
+    [selectedOrderIds, visibleOrders],
+  )
+  const selectedOrdersTotal = useMemo(
+    () => roundMoney(selectedVisibleOrders.reduce((sum, order) => sum + order.totals.total, 0)),
+    [selectedVisibleOrders],
+  )
+  const allVisibleOrdersSelected = visibleOrders.length > 0 && selectedVisibleOrders.length === visibleOrders.length
 
   const report = useMemo(() => buildReport(savedOrders, undefined, expenses), [expenses, savedOrders])
   const reportPeriod = useMemo(
@@ -983,6 +1076,30 @@ function App() {
     [reportFromDate, reportMonth, reportPeriodMode, reportToDate, reportYear],
   )
   const periodReport = useMemo(() => buildReport(savedOrders, reportPeriod, expenses), [expenses, reportPeriod, savedOrders])
+  const periodReportOrders = useMemo(
+    () =>
+      savedOrders
+        .filter((order) => isOrderInsidePeriod(order, reportPeriod))
+        .sort((first, second) => new Date(first.createdAt).getTime() - new Date(second.createdAt).getTime()),
+    [reportPeriod, savedOrders],
+  )
+  const periodReportExpenses = useMemo(
+    () =>
+      expenses
+        .filter((expense) => isExpenseInsidePeriod(expense, reportPeriod))
+        .sort((first, second) => first.date.localeCompare(second.date) || first.category.localeCompare(second.category)),
+    [expenses, reportPeriod],
+  )
+  const periodOpeningCash = isSingleDayReportPeriod(reportPeriod)
+    ? openingCashBalances[formatDateInputValue(reportPeriod.from)] ?? 0
+    : 0
+  const dailyReportDate = useMemo(() => parseDateInputValue(reportPrintDate, new Date()), [reportPrintDate])
+  const dailyReportPeriod = useMemo(() => getDailyReportPeriod(dailyReportDate), [dailyReportDate])
+  const dailyReport = useMemo(
+    () => buildReport(savedOrders, dailyReportPeriod, expenses),
+    [dailyReportPeriod, expenses, savedOrders],
+  )
+  const dailyOpeningCash = openingCashBalances[formatDateInputValue(dailyReportDate)] ?? 0
   const bestReportTrendPoint = useMemo(
     () =>
       periodReport.trendData.reduce<ReportTrendPoint | null>(
@@ -1057,6 +1174,13 @@ function App() {
     () => setupRestaurants.find((restaurant) => restaurant.id === setupRestaurantId) ?? null,
     [setupRestaurantId, setupRestaurants],
   )
+  const selectedSetupPlanDetails = useMemo(
+    () =>
+      getAppPlanDetails(selectedSetupRestaurant?.plan_name ?? '', selectedSetupRestaurant?.max_devices ?? 0) ??
+      appPlanCatalog.premium,
+    [selectedSetupRestaurant],
+  )
+  const selectedSetupIsOfflinePlan = selectedSetupPlanDetails.id === 'offline'
   const selectedSetupStaffUsers = useMemo(
     () =>
       (selectedSetupRestaurant?.staffUsers ?? [])
@@ -1251,6 +1375,9 @@ function App() {
         const loadedExpenses = normalizeExpenses(
           readDbValue(snapshot, 'pos-expenses', loadStoredArray<ExpenseEntry>('pos-expenses', [])),
         )
+        const loadedOpeningCashBalances = normalizeOpeningCashBalances(
+          readDbValue(snapshot, openingCashStorageKey, loadStoredObject<Record<string, number>>(openingCashStorageKey, {})),
+        )
         const loadedCustomers = readDbValue<CustomerProfile[]>(
           snapshot,
           'pos-customers',
@@ -1265,6 +1392,12 @@ function App() {
             'pos-cloud-sync-settings',
             loadStoredObject('pos-cloud-sync-settings', defaultCloudSyncSettings),
           ),
+        )
+        const loadedAppMode = normalizeAppMode(
+          readDbValue(snapshot, appModeStorageKey, localStorage.getItem(appModeStorageKey) || 'cloud'),
+        )
+        const loadedOfflineLicense = normalizeOfflineLicense(
+          readDbValue(snapshot, offlineLicenseStorageKey, loadStoredObject<Partial<OfflineLicense>>(offlineLicenseStorageKey, {})),
         )
         const loadedStaffUsers = normalizeStaffUsers(
           readDbValue(snapshot, 'pos-staff-users', loadStoredArray('pos-staff-users', [])),
@@ -1303,10 +1436,13 @@ function App() {
         setSavedOrders(loadedOrders)
         setQrOrders(loadedQrOrders)
         setExpenses(loadedExpenses)
+        setOpeningCashBalances(loadedOpeningCashBalances)
         setCustomers(loadedCustomers)
         businessProfileRef.current = loadedBusinessProfile
         setBusinessProfile(loadedBusinessProfile)
         setCloudSyncSettings(loadedCloudSyncSettings)
+        setAppMode(loadedAppMode)
+        setOfflineLicense(loadedOfflineLicense)
         setStaffUsers(loadedStaffUsers)
         setAuditLog(loadedAuditLog)
         setMenuDisplaySettings(loadedMenuDisplaySettings)
@@ -1314,8 +1450,12 @@ function App() {
         setBillPrinterProfileId(loadedBillPrinterProfileId)
         setActivePrinterProfileId(loadedActivePrinterProfileId)
         setBillNumber(getInitialBillNumber(loadedOrders))
+        setBillFinancialYear(getFinancialYearKey(new Date()))
         setTheme(loadedTheme === 'dark' ? 'dark' : 'light')
         setLocalDatabasePath(snapshot.path)
+        setLocalDatabaseDataDir(snapshot.dataDir ?? '')
+        setLocalDatabaseBackupDir(snapshot.backupDir ?? '')
+        void refreshDatabaseBackups()
         setPrinterStatus('Local SQLite database ready')
       })
       .catch((error) => {
@@ -1332,7 +1472,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [refreshDatabaseBackups])
 
   useEffect(() => {
     void refreshLocalServerStatus()
@@ -1392,6 +1532,10 @@ function App() {
   }, [expenses, storageReady])
 
   useEffect(() => {
+    persistStoredValue(openingCashStorageKey, openingCashBalances, storageReady && !skipPersistenceRef.current)
+  }, [openingCashBalances, storageReady])
+
+  useEffect(() => {
     persistStoredValue('pos-customers', customers, storageReady && !skipPersistenceRef.current)
   }, [customers, storageReady])
 
@@ -1402,6 +1546,14 @@ function App() {
   useEffect(() => {
     persistStoredValue('pos-cloud-sync-settings', cloudSyncSettings, storageReady && !skipPersistenceRef.current)
   }, [cloudSyncSettings, storageReady])
+
+  useEffect(() => {
+    persistStoredValue(appModeStorageKey, appMode, storageReady && !skipPersistenceRef.current, appMode)
+  }, [appMode, storageReady])
+
+  useEffect(() => {
+    persistStoredValue(offlineLicenseStorageKey, offlineLicense, storageReady && !skipPersistenceRef.current)
+  }, [offlineLicense, storageReady])
 
   useEffect(() => {
     persistStoredValue('pos-staff-users', staffUsers, storageReady && !skipPersistenceRef.current)
@@ -1480,6 +1632,18 @@ function App() {
   }, [])
 
   useEffect(() => {
+    const currentFinancialYear = getFinancialYearKey(currentDate)
+    if (currentFinancialYear === billFinancialYear) {
+      return
+    }
+
+    setBillFinancialYear(currentFinancialYear)
+    if (!cart.length) {
+      setBillNumber(getInitialBillNumber(savedOrders, currentDate))
+    }
+  }, [billFinancialYear, cart.length, currentDate, savedOrders])
+
+  useEffect(() => {
     if (!window.posUpdater) {
       setUpdateStatus({
         ...defaultUpdateStatus,
@@ -1536,6 +1700,19 @@ function App() {
   }, [activeView, storageReady])
 
   useEffect(() => {
+    setSelectedOrderIds((ids) => ids.filter((id) => visibleOrderIds.includes(id)))
+  }, [visibleOrderIds])
+
+  useEffect(() => {
+    setSelectedOrderIds([])
+  }, [orderListMode, orderListDate])
+
+  useEffect(() => {
+    if (appMode === 'offline') {
+      setSyncStatus('Offline mode active. Cloud sync is disabled.')
+      return undefined
+    }
+
     if (!storageReady || !cloudSyncSettings.autoSync) {
       return undefined
     }
@@ -1581,6 +1758,7 @@ function App() {
     cloudSyncSettings.autoSync,
     cloudSyncSettings.deviceId,
     cloudSyncSettings.restaurantId,
+    appMode,
     storageReady,
   ])
 
@@ -1620,16 +1798,79 @@ function App() {
       cloudSyncSettings.deviceId.trim() &&
       cloudSyncSettings.apiKey.trim(),
   )
-  const currentPlanDetails = getAppPlanDetails(
-    cloudSyncSettings.subscriptionPlan,
-    cloudSyncSettings.subscriptionMaxDevices,
-  )
-  const hasGoldLocalPlan = currentPlanDetails?.id === 'gold'
-  const hasSubscriptionAccess = !subscriptionLock
+  const hasOfflineAccess = appMode === 'offline' && isOfflineLicenseValid(offlineLicense)
+  const currentPlanDetails = hasOfflineAccess
+    ? getAppPlanDetails(offlineLicense.subscriptionPlan, offlineLicense.subscriptionMaxDevices) ?? appPlanCatalog.offline
+    : getAppPlanDetails(cloudSyncSettings.subscriptionPlan, cloudSyncSettings.subscriptionMaxDevices)
+  const hasGoldLocalPlan = !hasOfflineAccess && currentPlanDetails?.id === 'gold'
+  const hasCloudFeatureAccess = !hasOfflineAccess
+  const hasSubscriptionAccess = hasOfflineAccess || !subscriptionLock
   const localServerUrls = localServerStatus?.urls ?? []
   const localServerPrimaryUrl = localServerStatus?.primaryUrl || localServerUrls[0] || ''
   const localDnsStatus = localServerStatus?.dns
   const localDnsUrls = localDnsStatus?.urls ?? []
+  const currentLicenseRows = useMemo(() => {
+    if (hasOfflineAccess && offlineLicense) {
+      return [
+        { label: 'Mode', value: 'Offline' },
+        { label: 'Plan', value: currentPlanDetails?.name || offlineLicense.subscriptionPlan || 'Offline' },
+        { label: 'Status', value: titleCase(offlineLicense.subscriptionStatus || 'active') },
+        { label: 'Activation Date', value: formatLicenseDate(offlineLicense.activatedAt) },
+        { label: 'Expiry Date', value: formatLicenseDate(offlineLicense.expiresAt || offlineLicense.subscriptionExpiresAt) },
+        { label: 'License ID', value: offlineLicense.licenseId },
+        { label: 'License Key', value: offlineLicense.licenseKey },
+        { label: 'Business', value: offlineLicense.businessName },
+        { label: 'Phone', value: offlineLicense.phone },
+        { label: 'Device', value: offlineLicense.deviceName || 'This PC' },
+        { label: 'Device Fingerprint', value: offlineLicense.deviceFingerprint },
+        { label: 'Issued At', value: formatLicenseDate(offlineLicense.issuedAt) },
+      ]
+    }
+
+    return [
+      { label: 'Mode', value: 'Cloud' },
+      { label: 'Plan', value: currentPlanDetails?.name || cloudSyncSettings.subscriptionPlan || 'Not paired' },
+      { label: 'Status', value: titleCase(cloudSyncSettings.subscriptionStatus || 'not paired') },
+      { label: 'Expiry Date', value: formatLicenseDate(cloudSyncSettings.subscriptionExpiresAt) },
+      { label: 'Business', value: cloudSyncSettings.restaurantName || businessProfile.businessName || 'Not set' },
+      { label: 'Owner', value: cloudSyncSettings.restaurantOwnerName || businessProfile.ownerName || 'Not set' },
+      { label: 'Phone', value: cloudSyncSettings.restaurantPhone || businessProfile.phone || 'Not set' },
+      { label: 'Email', value: cloudSyncSettings.restaurantEmail || businessProfile.email || 'Not set' },
+      { label: 'Device', value: cloudSyncSettings.deviceName || 'Main App' },
+      { label: 'Restaurant ID', value: cloudSyncSettings.restaurantId || 'Not paired' },
+      { label: 'Device ID', value: cloudSyncSettings.deviceId || 'Not paired' },
+      { label: 'Server', value: cloudSyncSettings.apiUrl || defaultCloudSyncSettings.apiUrl },
+      { label: 'Last Sync', value: formatLicenseDate(cloudSyncSettings.lastSyncAt) },
+    ]
+  }, [businessProfile, cloudSyncSettings, currentPlanDetails?.name, hasOfflineAccess, offlineLicense])
+  const licenseValueByLabel = useMemo(() => {
+    return new Map(currentLicenseRows.map((row) => [row.label, row.value || 'Not set']))
+  }, [currentLicenseRows])
+  const licenseModeLabel = licenseValueByLabel.get('Mode') || 'Not set'
+  const licensePlanLabel = licenseValueByLabel.get('Plan') || 'Not set'
+  const licenseStatusLabel = licenseValueByLabel.get('Status') || 'Not set'
+  const licenseExpiryLabel = licenseValueByLabel.get('Expiry Date') || 'Not set'
+  const licenseGroups = useMemo(() => {
+    const pickRows = (labels: string[]) =>
+      labels
+        .map((label) => ({ label, value: licenseValueByLabel.get(label) || 'Not set' }))
+        .filter((row) => row.value !== 'Not set')
+
+    return [
+      {
+        title: 'License',
+        rows: pickRows(['Mode', 'Plan', 'Status', 'Activation Date', 'Expiry Date', 'License ID', 'License Key']),
+      },
+      {
+        title: 'Business',
+        rows: pickRows(['Business', 'Owner', 'Phone', 'Email']),
+      },
+      {
+        title: 'Device & Server',
+        rows: pickRows(['Device', 'Device ID', 'Device Fingerprint', 'Restaurant ID', 'Server', 'Last Sync', 'Issued At']),
+      },
+    ].filter((group) => group.rows.length)
+  }, [licenseValueByLabel])
 
   function hasPermission(permission: StaffPermission) {
     return currentPermissionSet.has(permission)
@@ -1641,6 +1882,10 @@ function App() {
     }
 
     if (view === 'home' || view === 'about') return true
+    if (hasOfflineAccess && (view === 'sync' || view === 'network')) {
+      return false
+    }
+
     if (!hasSubscriptionAccess) {
       return view === 'sync' && hasPermission('cloud_sync')
     }
@@ -1649,7 +1894,7 @@ function App() {
     if (view === 'reports') return hasPermission('reports')
     if (view === 'expenses') return hasPermission('expense_manage')
     if (view === 'profile') return hasPermission('business_profile')
-    if (view === 'sync') return hasPermission('cloud_sync')
+    if (view === 'sync') return hasCloudFeatureAccess && hasPermission('cloud_sync')
     if (view === 'users') return hasPermission('user_manage')
     if (view === 'network') return hasPermission('cloud_sync') && hasGoldLocalPlan
 
@@ -1658,7 +1903,13 @@ function App() {
 
   function goToView(view: AppView) {
     if (!canOpenView(view)) {
-      setPrinterStatus(view === 'network' ? 'Local POS Server is included in Gold plan.' : subscriptionLock?.message ?? 'Permission required')
+      setPrinterStatus(
+        hasOfflineAccess && (view === 'sync' || view === 'network')
+          ? 'Offline plan does not include cloud sync or local POS server.'
+          : view === 'network'
+            ? 'Local POS Server is included in Gold plan.'
+            : subscriptionLock?.message ?? 'Permission required',
+      )
       return
     }
 
@@ -1666,6 +1917,11 @@ function App() {
   }
 
   function requirePermission(permission: StaffPermission, message = 'Permission required') {
+    if (hasOfflineAccess && permission === 'cloud_sync') {
+      setPrinterStatus('Offline plan does not include cloud sync.')
+      return false
+    }
+
     if (!hasSubscriptionAccess && permission !== 'cloud_sync') {
       setPrinterStatus(subscriptionLock?.message ?? 'Subscription check required')
       return false
@@ -1753,6 +2009,7 @@ function App() {
     const deviceName = mainAppDeviceName
     const transferCode = normalizeTransferCode(setupTransferCode)
     const createOwnerLogin = selectedSetupStaffUsers.length === 0
+    const isOfflineActivation = selectedSetupIsOfflinePlan
 
     if (!apiUrl || !setupCloudToken || !restaurantId) {
       setSetupStatus('Login to cloud and select restaurant first')
@@ -1773,15 +2030,21 @@ function App() {
     }
 
     setSetupWorking(true)
-    setSetupStatus('Activating this device...')
+    setSetupStatus(isOfflineActivation ? 'Activating offline mode...' : 'Activating this device...')
 
     try {
+      const deviceFingerprint = getOrCreateDeviceFingerprint()
       const activateResponse = await fetch(
         `${apiUrl}/api/v1/client/restaurants/${encodeURIComponent(restaurantId)}/devices/activate`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-client-token': setupCloudToken },
-          body: JSON.stringify({ deviceName, ...(transferCode ? { transferCode } : {}) }),
+          body: JSON.stringify({
+            deviceName,
+            activationMode: isOfflineActivation ? 'offline' : 'cloud',
+            deviceFingerprint,
+            ...(transferCode ? { transferCode } : {}),
+          }),
         },
       )
       const activateResult = await parseCloudResponse<CloudPairResponse>(activateResponse)
@@ -1791,6 +2054,14 @@ function App() {
 
       if (!activatedRestaurantId || !activatedDeviceId || !apiKey) {
         throw new Error('Device activation response missing sync credentials')
+      }
+
+      const nextOfflineLicense = isOfflineActivation
+        ? normalizeOfflineLicense(activateResult.offlineLicense)
+        : null
+
+      if (isOfflineActivation && !isOfflineLicenseValid(nextOfflineLicense)) {
+        throw new Error('Offline activation response missing license')
       }
 
       setSetupStatus('Clearing old local restaurant data...')
@@ -1821,21 +2092,35 @@ function App() {
         restaurantOwnerName: cloudProfile.ownerName || '',
         restaurantPhone: cloudProfile.phone || '',
         restaurantEmail: cloudProfile.email || '',
-        deviceId: activatedDeviceId,
+        deviceId: isOfflineActivation ? '' : activatedDeviceId,
         deviceName: String(activateResult.device?.name || deviceName),
-        apiKey,
+        apiKey: isOfflineActivation ? '' : apiKey,
         subscriptionPlan: String(activateResult.subscription?.plan_name || ''),
         subscriptionStatus: String(activateResult.subscription?.status || ''),
         subscriptionExpiresAt: String(activateResult.subscription?.expires_at || ''),
         subscriptionMaxDevices: Number(activateResult.subscription?.max_devices || 0),
-        autoSync: true,
+        autoSync: !isOfflineActivation,
         lastSyncAt: snapshot.serverTime,
       }
 
       cloudSyncSettingsRef.current = nextCloudSettings
       setCloudSyncSettings(nextCloudSettings)
+      setAppMode(isOfflineActivation ? 'offline' : 'cloud')
+      setOfflineLicense(nextOfflineLicense)
       localStorage.setItem('pos-cloud-sync-settings', JSON.stringify(nextCloudSettings))
+      localStorage.setItem(appModeStorageKey, isOfflineActivation ? 'offline' : 'cloud')
+      if (nextOfflineLicense) {
+        localStorage.setItem(offlineLicenseStorageKey, JSON.stringify(nextOfflineLicense))
+      } else {
+        localStorage.removeItem(offlineLicenseStorageKey)
+      }
       await window.posDb.set('pos-cloud-sync-settings', JSON.stringify(nextCloudSettings))
+      await window.posDb.set(appModeStorageKey, JSON.stringify(isOfflineActivation ? 'offline' : 'cloud'))
+      await window.posDb.set(offlineLicenseStorageKey, JSON.stringify(nextOfflineLicense))
+      if (isOfflineActivation) {
+        await window.posServer?.stop?.()
+        await refreshLocalServerStatus()
+      }
       setSetupTransferCode('')
       setPendingSyncCount(0)
       applyCloudSignupBusinessProfile(cloudProfile)
@@ -1848,7 +2133,7 @@ function App() {
         setLoginError('')
         setForgotPinOpen(false)
         setSetupStatus(
-          `Cloud restore complete. ${snapshot.changes.length} item(s) restored.${transferNote} Login with your old app user PIN.`,
+          `${isOfflineActivation ? 'Offline activation' : 'Cloud restore'} complete. ${snapshot.changes.length} item(s) restored.${transferNote} Login with your old app user PIN.`,
         )
       } else {
         const pin = await hashPin(setupOwnerPin)
@@ -1879,11 +2164,11 @@ function App() {
         setSetupOwnerPin('')
         setSetupOwnerPinConfirm('')
         setSetupStatus(
-          `Cloud restore complete.${transferNote} Owner login created. Login with the new Owner PIN.`,
+          `${isOfflineActivation ? 'Offline activation' : 'Cloud restore'} complete.${transferNote} Owner login created. Login with the new Owner PIN.`,
         )
       }
     } catch (error) {
-      setSetupStatus(`Cloud restore failed: ${getCloudErrorMessage(error, apiUrl)}`)
+      setSetupStatus(`${isOfflineActivation ? 'Offline activation' : 'Cloud restore'} failed: ${getCloudErrorMessage(error, apiUrl)}`)
     } finally {
       setSetupWorking(false)
     }
@@ -2000,9 +2285,21 @@ function App() {
     }
 
     setLoginCheckingCloud(true)
-    setLoginError('Checking cloud subscription...')
+    setLoginError(appMode === 'offline' ? 'Checking offline license...' : 'Checking cloud subscription...')
 
     try {
+      if (appMode === 'offline') {
+        if (!isOfflineLicenseValid(offlineLicense)) {
+          setLoginPin('')
+          setLoginError('Offline license is missing or expired. Activate again from GI.')
+          return
+        }
+
+        setSubscriptionLock(null)
+        completePinLogin(user)
+        return
+      }
+
       const cloudCheck = await checkCloudAccessForLogin(user)
 
       if (cloudCheck.status === 'device_logged_out') {
@@ -2283,6 +2580,53 @@ function App() {
     setCloudSyncSettings((settings) => ({ ...settings, [field]: value }))
   }
 
+  function updateOpeningCashBalance(date: Date, value: string) {
+    if (!requirePermission('reports', 'Report permission required')) {
+      return
+    }
+
+    const dateKey = formatDateInputValue(date)
+    const amount = roundMoney(Math.max(0, Number(value) || 0))
+    setOpeningCashBalances((balances) => ({ ...balances, [dateKey]: amount }))
+  }
+
+  async function createDatabaseBackupNow() {
+    if (!window.posDb?.createBackup) {
+      setDatabaseBackupStatus('Backup works only in the desktop app')
+      return
+    }
+
+    try {
+      const result = await window.posDb.createBackup()
+      setDatabaseBackupStatus(`Backup created: ${result.fileName}`)
+      await refreshDatabaseBackups()
+    } catch (error) {
+      setDatabaseBackupStatus(`Backup failed: ${getErrorMessage(error)}`)
+    }
+  }
+
+  async function restoreSelectedDatabaseBackup() {
+    if (!window.posDb?.restoreBackup || !selectedDatabaseBackup) {
+      setDatabaseBackupStatus('Select a backup to restore')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Restore ${selectedDatabaseBackup}? Current data will be backed up before restore, then the app will reload.`,
+    )
+    if (!confirmed) {
+      return
+    }
+
+    try {
+      await window.posDb.restoreBackup(selectedDatabaseBackup)
+      setDatabaseBackupStatus('Backup restored. Reloading app...')
+      window.location.reload()
+    } catch (error) {
+      setDatabaseBackupStatus(`Restore failed: ${getErrorMessage(error)}`)
+    }
+  }
+
   async function resetLocalRestaurantDataForAccountSwitch(apiUrl: string) {
     const safeApiUrl = normalizeApiUrl(apiUrl) || defaultCloudSyncSettings.apiUrl
     const nextSettings = normalizeCloudSyncSettings({
@@ -2319,9 +2663,12 @@ function App() {
       setSavedOrders([])
       setQrOrders([])
       setExpenses([])
+      setOpeningCashBalances({})
       setCustomers([])
       setBusinessProfile(defaultBusinessProfile)
       setCloudSyncSettings(nextSettings)
+      setAppMode('cloud')
+      setOfflineLicense(null)
       setStaffUsers([])
       setAuditLog([])
       setCurrentUserId('')
@@ -2422,6 +2769,44 @@ function App() {
       setPrinterStatus('Business Profile updated from client signup details')
     } else {
       setPrinterStatus('No cloud signup details available to update Business Profile')
+    }
+  }
+
+  async function completeActivationLogout() {
+    if (!currentUser || !hasPermission('user_manage')) {
+      setPrinterStatus('Owner permission required for complete logout')
+      return
+    }
+
+    const confirmed = window.confirm(
+      hasOfflineAccess
+        ? 'Complete logout from this offline activation and clear local restaurant data from this PC? You must login with the client cloud account and activate again.'
+        : 'Complete logout from this cloud account and clear local restaurant data from this PC? Cloud backup data stays on the server.',
+    )
+
+    if (!confirmed) {
+      return
+    }
+
+    const apiUrl = normalizeApiUrl(cloudSyncSettingsRef.current.apiUrl) || defaultCloudSyncSettings.apiUrl
+    setSyncing(true)
+    setPrinterStatus('Completing logout...')
+
+    try {
+      await resetLocalRestaurantDataForAccountSwitch(apiUrl)
+      setSetupCloudApiUrl(apiUrl)
+      setSetupCloudLogin('')
+      setSetupCloudPassword('')
+      setSetupCloudToken('')
+      setSetupRestaurants([])
+      setSetupRestaurantId('')
+      setSetupTransferCode('')
+      setSetupStatus('Complete logout done. Login with cloud account or activate offline to continue.')
+      setSyncStatus('Complete logout done. Local restaurant data cleared.')
+    } catch (error) {
+      setPrinterStatus(`Complete logout failed: ${getErrorMessage(error)}`)
+    } finally {
+      setSyncing(false)
     }
   }
 
@@ -2917,7 +3302,11 @@ function App() {
               : []
             setSavedOrders(restoredOrders)
             setBillNumber(getInitialBillNumber(restoredOrders))
+            setBillFinancialYear(getFinancialYearKey(new Date()))
           }
+          break
+        case openingCashStorageKey:
+          setOpeningCashBalances(normalizeOpeningCashBalances(change.value as Record<string, number>))
           break
         case 'pos-expenses':
           setExpenses(normalizeExpenses(Array.isArray(change.value) ? (change.value as ExpenseEntry[]) : []))
@@ -3093,6 +3482,11 @@ function App() {
   }
 
   async function openTableQrPreview(tableName: string) {
+    if (!hasCloudFeatureAccess || !hasGoldLocalPlan) {
+      setPrinterStatus('Table QR requires Gold plan with local POS server.')
+      return
+    }
+
     const url = getTableQrUrl(tableName)
 
     if (!tableList.some((savedTableName) => savedTableName.toLowerCase() === tableName.toLowerCase())) {
@@ -3496,7 +3890,15 @@ function App() {
     setOrderType('Dining')
     setActiveOrderId(createOrderId())
     if (advanceBill) {
-      setBillNumber((value) => getNextBillNumber(savedOrders, value))
+      const currentFinancialYear = getFinancialYearKey(new Date())
+      setBillFinancialYear(currentFinancialYear)
+      setBillNumber((value) =>
+        getNextBillNumber(
+          savedOrders,
+          billFinancialYear === currentFinancialYear ? value : firstBillNumber - 1,
+          new Date(),
+        ),
+      )
     }
   }
 
@@ -3613,20 +4015,41 @@ function App() {
     setPrinterStatus(`Loaded bill ${order.billNo}`)
   }
 
-  function deleteOrder(orderId: string) {
+  function toggleOrderSelection(orderId: string) {
+    setSelectedOrderIds((ids) =>
+      ids.includes(orderId) ? ids.filter((id) => id !== orderId) : [...ids, orderId],
+    )
+  }
+
+  function toggleAllVisibleOrders() {
+    setSelectedOrderIds(allVisibleOrdersSelected ? [] : visibleOrderIds)
+  }
+
+  function deleteSelectedOrders() {
     if (!requirePermission('order_delete', 'Delete order permission required')) {
       return
     }
 
-    const order = savedOrders.find((savedOrder) => savedOrder.id === orderId)
-    const label = order ? `Bill #${order.billNo} (${order.orderType}${order.table ? ` / ${order.table}` : ''})` : 'this order'
-
-    if (!window.confirm(`Delete ${label}? This cannot be undone.`)) {
+    if (!selectedVisibleOrders.length) {
+      setPrinterStatus('Select orders to delete')
       return
     }
 
-    setSavedOrders((orders) => orders.filter((order) => order.id !== orderId))
-    recordAudit('order_deleted', `${label} deleted`)
+    const billList = selectedVisibleOrders
+      .map((order) => `#${order.billNo}`)
+      .slice(0, 6)
+      .join(', ')
+    const extraCount = Math.max(0, selectedVisibleOrders.length - 6)
+    const label = `${selectedVisibleOrders.length} order(s) (${billList}${extraCount ? ` +${extraCount} more` : ''})`
+
+    if (!window.confirm(`Delete selected ${label}? This cannot be undone.`)) {
+      return
+    }
+
+    const selectedIds = new Set(selectedVisibleOrders.map((order) => order.id))
+    setSavedOrders((orders) => orders.filter((order) => !selectedIds.has(order.id)))
+    setSelectedOrderIds([])
+    recordAudit('orders_deleted', `${label} deleted / ${money(selectedOrdersTotal)}`)
   }
 
   function selectTable(tableNo: string) {
@@ -4406,7 +4829,12 @@ function App() {
     }
   }
 
-  function buildReportPrintPayload(reportData: ReturnType<typeof buildReport>, period: ReportPeriod, title: string): ReportPrintPayload {
+  function buildReportPrintPayload(
+    reportData: ReturnType<typeof buildReport>,
+    period: ReportPeriod,
+    title: string,
+    openingCash = 0,
+  ): ReportPrintPayload {
     return {
       settings: billPrinterSettings,
       report: {
@@ -4419,10 +4847,14 @@ function App() {
           phone: businessProfile.phone.trim(),
         },
         salesTotal: reportData.salesTotal,
+        receivedTotal: reportData.receivedTotal,
         paidCount: reportData.paidCount,
-        cashInHand: reportData.cashInHand,
+        openingCash,
+        cashReceivedTotal: reportData.cashReceivedTotal,
+        cashInHand: roundMoney(openingCash + reportData.cashInHand),
         upiTotal: reportData.upiTotal,
         cardTotal: reportData.cardTotal,
+        bankReceivedTotal: reportData.bankReceivedTotal,
         bankTotal: reportData.bankTotal,
         balanceTotal: reportData.balanceTotal,
         discountTotal: reportData.discountTotal,
@@ -4451,7 +4883,12 @@ function App() {
     const dailyReport = buildReport(savedOrders, dailyPeriod, expenses)
     const isToday = formatDateInputValue(printDate) === formatDateInputValue(new Date())
     const title = isToday ? 'Today Sales Report' : `Daily Sales Report - ${formatDate(printDate)}`
-    const payload = buildReportPrintPayload(dailyReport, dailyPeriod, title)
+    const payload = buildReportPrintPayload(
+      dailyReport,
+      dailyPeriod,
+      title,
+      openingCashBalances[formatDateInputValue(printDate)] ?? 0,
+    )
 
     try {
       setPrinterStatus('Printing report...')
@@ -4479,7 +4916,12 @@ function App() {
     const yesterdayPeriod = getDailyReportPeriod(yesterday)
     const yesterdayReport = buildReport(savedOrders, yesterdayPeriod, expenses)
     const title = `Previous Day Report - ${formatDate(yesterday)}`
-    const payload = buildReportPrintPayload(yesterdayReport, yesterdayPeriod, title)
+    const payload = buildReportPrintPayload(
+      yesterdayReport,
+      yesterdayPeriod,
+      title,
+      openingCashBalances[yesterdayDateValue] ?? 0,
+    )
 
     try {
       setPrinterStatus('Printing previous day report...')
@@ -4491,6 +4933,76 @@ function App() {
 
       printReportInBrowser(payload)
       setPrinterStatus('Previous day report opened for printing')
+    } catch (error) {
+      setPrinterStatus(getErrorMessage(error))
+    }
+  }
+
+  async function printCurrentPeriodReport() {
+    if (!requirePermission('reports', 'Report permission required')) {
+      return
+    }
+
+    const payload = buildReportPrintPayload(periodReport, reportPeriod, `Sales Report - ${periodReport.periodLabel}`, periodOpeningCash)
+
+    try {
+      setPrinterStatus('Printing period report...')
+      if (window.posPrinter?.printReport) {
+        await window.posPrinter.printReport(payload)
+        setPrinterStatus('Period report sent to bill printer')
+        return
+      }
+
+      printReportInBrowser(payload)
+      setPrinterStatus('Period report opened for printing')
+    } catch (error) {
+      setPrinterStatus(getErrorMessage(error))
+    }
+  }
+
+  async function exportCurrentPeriodReport(format: 'csv' | 'excel' | 'pdf') {
+    if (!requirePermission('reports', 'Report permission required')) {
+      return
+    }
+
+    const exportData: ReportExportData = {
+      reportData: periodReport,
+      period: reportPeriod,
+      orders: periodReportOrders,
+      expenses: periodReportExpenses,
+      businessProfile,
+      businessName: receiptBusinessName,
+      generatedAt: new Date().toISOString(),
+      openingCash: periodOpeningCash,
+    }
+    const baseFileName = buildReportExportFileName(exportData)
+
+    try {
+      if (format === 'csv') {
+        downloadTextFile(`${baseFileName}.csv`, buildReportCsv(exportData), 'text/csv;charset=utf-8')
+        setPrinterStatus('CSV report exported')
+        return
+      }
+
+      if (format === 'excel') {
+        downloadTextFile(
+          `${baseFileName}.xls`,
+          buildReportExportHtml(exportData, 'excel'),
+          'application/vnd.ms-excel;charset=utf-8',
+        )
+        setPrinterStatus('Excel report exported')
+        return
+      }
+
+      const html = buildReportExportHtml(exportData, 'pdf')
+      if (window.posPrinter?.exportReportPdf) {
+        const result = await window.posPrinter.exportReportPdf({ html, defaultFileName: `${baseFileName}.pdf` })
+        setPrinterStatus(result.canceled ? 'PDF export cancelled' : `PDF report exported${result.path ? `: ${result.path}` : ''}`)
+        return
+      }
+
+      openReportExportPrintWindow(html)
+      setPrinterStatus('PDF layout opened. Use Print or Save as PDF.')
     } catch (error) {
       setPrinterStatus(getErrorMessage(error))
     }
@@ -4612,6 +5124,20 @@ function App() {
                       />
                     </label>
                   </div>
+                  <div className="setup-owner-pin">
+                    <strong>Activation Plan</strong>
+                    <span>
+                      {selectedSetupIsOfflinePlan
+                        ? 'Offline plan restores once and then uses local SQLite only.'
+                        : `${selectedSetupPlanDetails.name} plan keeps cloud backup/sync active.`}
+                    </span>
+                    <div className="app-plan-badges">
+                      <span>{selectedSetupPlanDetails.name}</span>
+                      <span className={selectedSetupIsOfflinePlan ? 'limited' : 'included'}>
+                        {selectedSetupIsOfflinePlan ? 'Offline This PC' : 'Cloud Backup'}
+                      </span>
+                    </div>
+                  </div>
                   <div className="setup-user-preview">
                     <strong>Previous App Users</strong>
                     {selectedSetupStaffUsers.length ? (
@@ -4656,8 +5182,14 @@ function App() {
                     onClick={() => void restoreCloudDataForSetup()}
                     disabled={setupWorking || !setupRestaurantId}
                   >
-                    <RefreshCw size={16} />
-                    {selectedSetupStaffUsers.length ? 'Restore Server Data' : 'Restore & Create Owner'}
+                    {selectedSetupIsOfflinePlan ? <Save size={16} /> : <RefreshCw size={16} />}
+                    {selectedSetupIsOfflinePlan
+                      ? selectedSetupStaffUsers.length
+                        ? 'Activate Offline'
+                        : 'Activate Offline & Create Owner'
+                      : selectedSetupStaffUsers.length
+                        ? 'Restore Server Data'
+                        : 'Restore & Create Owner'}
                   </button>
                 </>
               )}
@@ -4843,16 +5375,18 @@ function App() {
               <ReceiptText size={16} />
               Orders
             </button>
-            <button
-              className={pendingQrOrders.length ? 'tool-button qr-alert' : 'tool-button'}
-              type="button"
-              title="Table QR orders"
-              onClick={() => setQrOrdersOpen(true)}
-            >
-              <QrCode size={16} />
-              QR
-              {pendingQrOrders.length > 0 && <span className="nav-badge">{pendingQrOrders.length}</span>}
-            </button>
+            {hasCloudFeatureAccess && hasGoldLocalPlan && (
+              <button
+                className={pendingQrOrders.length ? 'tool-button qr-alert' : 'tool-button'}
+                type="button"
+                title="Table QR orders"
+                onClick={() => setQrOrdersOpen(true)}
+              >
+                <QrCode size={16} />
+                QR
+                {pendingQrOrders.length > 0 && <span className="nav-badge">{pendingQrOrders.length}</span>}
+              </button>
+            )}
             <button className="tool-button" type="button" title="Hold orders" onClick={() => openOrderList('hold')}>
               <Clock3 size={16} />
               Hold
@@ -4958,7 +5492,7 @@ function App() {
 
       {activeView === 'home' && (
         <section className="home-view page-view">
-          {subscriptionLock && (
+            {subscriptionLock && !hasOfflineAccess && (
             <section className="home-card subscription-lock-card">
               <div>
                 <span>Cloud Access Locked</span>
@@ -4970,7 +5504,7 @@ function App() {
                 </small>
               </div>
               <div className="subscription-lock-actions">
-                {hasPermission('cloud_sync') && (
+                {hasCloudFeatureAccess && hasPermission('cloud_sync') && (
                   <button className="home-action primary" type="button" onClick={() => goToView('sync')}>
                     <Wifi size={18} />
                     Cloud Sync
@@ -5026,18 +5560,18 @@ function App() {
               <span>Bill and KOT printers</span>
             </button>
             )}
-            {hasSubscriptionAccess && hasPermission('cloud_sync') && hasGoldLocalPlan && (
+            {hasSubscriptionAccess && hasCloudFeatureAccess && hasPermission('cloud_sync') && hasGoldLocalPlan && (
             <button className="home-launch-tile" type="button" onClick={() => goToView('network')}>
               <Monitor size={34} />
               <strong>Local Server</strong>
               <span>Main PC LAN access</span>
             </button>
             )}
-            {(hasPermission('business_profile') || hasPermission('cloud_sync') || hasPermission('user_manage')) && (
+            {(hasPermission('business_profile') || (hasCloudFeatureAccess && hasPermission('cloud_sync')) || hasPermission('user_manage')) && (
             <button className="home-launch-tile" type="button" onClick={openAccountPanel}>
               <User size={34} />
               <strong>Account</strong>
-              <span>Profile, sync, and users</span>
+              <span>{hasOfflineAccess ? 'Profile and users' : 'Profile, sync, and users'}</span>
             </button>
             )}
           </div>
@@ -5063,6 +5597,10 @@ function App() {
                 <button className="home-action" type="button" onClick={printSelectedDateReport}>
                   <Printer size={18} />
                   Print Selected Date
+                </button>
+                <button className="home-action" type="button" onClick={printCurrentPeriodReport}>
+                  <Printer size={18} />
+                  Print Period
                 </button>
                 <button className="home-action" type="button" onClick={printPreviousDayReport} title="Print yesterday's sales report">
                   <Printer size={18} />
@@ -5140,6 +5678,57 @@ function App() {
                 <span>Showing</span>
                 <strong>{periodReport.periodLabel}</strong>
               </div>
+            </div>
+          </section>
+
+          <section className="home-card report-export-panel">
+            <div>
+              <strong>Export Report</strong>
+              <span>Use for custom period, monthly, yearly, accountant sharing, or A4 printing.</span>
+            </div>
+            <div className="report-export-actions">
+              <button className="small-button" type="button" onClick={() => void exportCurrentPeriodReport('csv')}>
+                <Save size={15} />
+                CSV
+              </button>
+              <button className="small-button" type="button" onClick={() => void exportCurrentPeriodReport('excel')}>
+                <Save size={15} />
+                Excel
+              </button>
+              <button className="small-button primary" type="button" onClick={() => void exportCurrentPeriodReport('pdf')}>
+                <ReceiptText size={15} />
+                PDF
+              </button>
+            </div>
+          </section>
+
+          <section className="home-card daily-cash-desk">
+            <div className="section-title">
+              <div>
+                <strong>Opening Cash</strong>
+                <span>{formatDate(dailyReportDate)} daily cash start</span>
+              </div>
+              <Banknote size={22} />
+            </div>
+
+            <div className="daily-opening-row">
+              <label>
+                Opening Cash
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={dailyOpeningCash || ''}
+                  onChange={(event) => updateOpeningCashBalance(dailyReportDate, event.currentTarget.value)}
+                />
+              </label>
+              <div className="opening-cash-preview">
+                <span>Cash In Hand With Opening</span>
+                <strong>{money(roundMoney(dailyOpeningCash + dailyReport.cashInHand))}</strong>
+              </div>
+              <button className="small-button" type="button" onClick={() => updateOpeningCashBalance(dailyReportDate, '0')}>
+                Reset Opening
+              </button>
             </div>
           </section>
 
@@ -5362,14 +5951,20 @@ function App() {
                   <input
                     type="date"
                     value={expenseDraft.date}
-                    onChange={(event) => setExpenseDraft((draft) => ({ ...draft, date: event.currentTarget.value }))}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value
+                      setExpenseDraft((draft) => ({ ...draft, date: value }))
+                    }}
                   />
                 </label>
                 <label>
                   Category
                   <select
                     value={expenseDraft.category}
-                    onChange={(event) => setExpenseDraft((draft) => ({ ...draft, category: event.currentTarget.value }))}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value
+                      setExpenseDraft((draft) => ({ ...draft, category: value }))
+                    }}
                   >
                     {expenseCategories.map((category) => (
                       <option key={category} value={category}>
@@ -5385,7 +5980,10 @@ function App() {
                     min="0"
                     step="0.01"
                     value={expenseDraft.amount}
-                    onChange={(event) => setExpenseDraft((draft) => ({ ...draft, amount: event.currentTarget.value }))}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value
+                      setExpenseDraft((draft) => ({ ...draft, amount: value }))
+                    }}
                     placeholder="0.00"
                   />
                 </label>
@@ -5393,12 +5991,13 @@ function App() {
                   Payment
                   <select
                     value={expenseDraft.paymentMethod}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      const value = event.currentTarget.value
                       setExpenseDraft((draft) => ({
                         ...draft,
-                        paymentMethod: event.currentTarget.value === 'Bank' ? 'Bank' : 'Cash',
+                        paymentMethod: value === 'Bank' ? 'Bank' : 'Cash',
                       }))
-                    }
+                    }}
                   >
                     <option value="Cash">Cash</option>
                     <option value="Bank">Bank</option>
@@ -5408,7 +6007,10 @@ function App() {
                   Vendor
                   <input
                     value={expenseDraft.vendor}
-                    onChange={(event) => setExpenseDraft((draft) => ({ ...draft, vendor: event.currentTarget.value }))}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value
+                      setExpenseDraft((draft) => ({ ...draft, vendor: value }))
+                    }}
                     placeholder="Supplier / staff / shop"
                   />
                 </label>
@@ -5416,7 +6018,10 @@ function App() {
                   Note
                   <input
                     value={expenseDraft.note}
-                    onChange={(event) => setExpenseDraft((draft) => ({ ...draft, note: event.currentTarget.value }))}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value
+                      setExpenseDraft((draft) => ({ ...draft, note: value }))
+                    }}
                     placeholder="Short note"
                   />
                 </label>
@@ -5980,15 +6585,25 @@ function App() {
               <div className="app-plan-card">
                 <div>
                   <span>Current Plan</span>
-                  <strong>{currentPlanDetails?.name || cloudSyncSettings.subscriptionPlan || 'Not paired'}</strong>
+                  <strong>
+                    {hasOfflineAccess
+                      ? `${currentPlanDetails?.name || offlineLicense.subscriptionPlan || 'Offline'} / Offline`
+                      : currentPlanDetails?.name || cloudSyncSettings.subscriptionPlan || 'Not paired'}
+                  </strong>
                   <small>
-                    {currentPlanDetails?.subtitle || 'Connect cloud account to load plan details'}
+                    {hasOfflineAccess
+                      ? 'Local SQLite only. Cloud backup and local POS server are disabled.'
+                      : currentPlanDetails?.subtitle || 'Connect cloud account to load plan details'}
                   </small>
                 </div>
                 <div className="app-plan-badges">
-                  <span>{formatDeviceLimit(cloudSyncSettings.subscriptionMaxDevices)}</span>
+                  <span>
+                    {hasOfflineAccess
+                      ? formatDeviceLimit(offlineLicense.subscriptionMaxDevices)
+                      : formatDeviceLimit(cloudSyncSettings.subscriptionMaxDevices)}
+                  </span>
                   <span className={hasGoldLocalPlan ? 'included' : 'limited'}>
-                    {hasGoldLocalPlan ? 'Local POS included' : 'Local POS not included'}
+                    {hasOfflineAccess ? 'Offline mode' : hasGoldLocalPlan ? 'Local POS included' : 'Local POS not included'}
                   </span>
                 </div>
               </div>
@@ -6214,38 +6829,75 @@ function App() {
             </button>
           </div>
 
-          <div className="about-layout">
-            <section className="home-card app-about-card">
-              <h3>App Details</h3>
-              <div className="business-lines">
-                <div>
-                  <Settings size={17} />
-                  <span>{appName}</span>
+          <div className="about-layout refined-about-layout">
+            <section className="home-card about-hero-card">
+              <div className="about-hero-brand">
+                <div className="brand-mark about-brand-mark">
+                  <img src={appIconUrl} alt="" />
                 </div>
                 <div>
-                  <Landmark size={17} />
-                  <span>App Owner: {appOwner}</span>
+                  <span>{hasOfflineAccess ? 'Offline POS license' : 'Cloud connected POS'}</span>
+                  <h2>{appName}</h2>
+                  <p>
+                    {companyName} - {companyWebsiteDisplay}
+                  </p>
                 </div>
-                <div>
-                  <Globe2 size={17} />
-                  <span>{companyWebsiteDisplay}</span>
-                </div>
-                <div>
-                  <ReceiptText size={17} />
-                  <span>Version {appVersion}</span>
-                </div>
-                <div>
-                  <Monitor size={17} />
-                  <span>{localDatabasePath ? 'Local SQLite database' : 'Browser local storage'}</span>
-                </div>
-                {localDatabasePath && (
-                  <div>
-                    <Save size={17} />
-                    <span title={localDatabasePath}>{localDatabasePath}</span>
-                  </div>
-                )}
               </div>
-              <div className="app-update-panel">
+              <div className="about-hero-badges">
+                <span>{licensePlanLabel}</span>
+                <span className={licenseStatusLabel.toLowerCase().includes('active') ? 'good' : 'warn'}>
+                  {licenseStatusLabel}
+                </span>
+                <span>v{appVersion}</span>
+              </div>
+            </section>
+
+            <section className="about-summary-grid" aria-label="App and license summary">
+              <article>
+                <span>Plan</span>
+                <strong>{licensePlanLabel}</strong>
+                <small>{licenseModeLabel}</small>
+              </article>
+              <article>
+                <span>Expiry</span>
+                <strong>{licenseExpiryLabel}</strong>
+                <small>Current subscription validity</small>
+              </article>
+              <article>
+                <span>Storage</span>
+                <strong>{localDatabasePath ? 'SQLite Ready' : 'Browser Storage'}</strong>
+                <small title={localDatabaseDataDir || localDatabasePath || 'Local storage'}>
+                  {localDatabaseDataDir || localDatabasePath || 'Local storage'}
+                </small>
+              </article>
+              <article>
+                <span>Update</span>
+                <strong>{updateStatus.state === 'idle' ? 'Ready' : titleCase(updateStatus.state)}</strong>
+                <small>{updateStatus.message}</small>
+              </article>
+            </section>
+
+            <section className="home-card license-details-panel refined-license-panel">
+              <div>
+                <strong>License Details</strong>
+                <span>Activation, business, device, and sync information</span>
+              </div>
+              <div className="license-group-grid">
+                {licenseGroups.map((group) => (
+                  <div className="license-group" key={group.title}>
+                    <h4>{group.title}</h4>
+                    {group.rows.map((row) => (
+                      <div className="license-detail-row" key={`${group.title}-${row.label}`}>
+                        <span>{row.label}</span>
+                        <strong title={row.value}>{row.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="home-card app-update-panel about-update-card">
                 <div>
                   <strong>App Update</strong>
                   <span>{updateStatus.message}</span>
@@ -6273,7 +6925,70 @@ function App() {
                   )}
                 </div>
                 <small>{updateStatus.updateUrl || 'Update server not set'}</small>
-              </div>
+            </section>
+
+            <section className="home-card database-safety-panel about-data-card">
+                <div>
+                  <strong>Local Data Safety</strong>
+                  <span>Database is stored outside the installer folder so uninstall will not remove bills, users, or menu data.</span>
+                </div>
+                <div className="database-path-list">
+                  <div>
+                    <span>Data Folder</span>
+                    <strong title={localDatabaseDataDir || 'C:\\GIPOS Restaurant'}>
+                      {localDatabaseDataDir || 'C:\\GIPOS Restaurant'}
+                    </strong>
+                  </div>
+                  {localDatabasePath && (
+                    <div>
+                      <span>Database</span>
+                      <strong title={localDatabasePath}>{localDatabasePath}</strong>
+                    </div>
+                  )}
+                  {localDatabaseBackupDir && (
+                    <div>
+                      <span>Backup Folder</span>
+                      <strong title={localDatabaseBackupDir}>{localDatabaseBackupDir}</strong>
+                    </div>
+                  )}
+                </div>
+                <div className="database-backup-row">
+                  <select
+                    value={selectedDatabaseBackup}
+                    onChange={(event) => setSelectedDatabaseBackup(event.target.value)}
+                    disabled={!databaseBackups.length}
+                  >
+                    {databaseBackups.length ? (
+                      databaseBackups.map((backup) => (
+                        <option key={backup.fileName} value={backup.fileName}>
+                          {backup.fileName} - {formatFileSize(backup.size)}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">No backups found</option>
+                    )}
+                  </select>
+                  <button className="small-button" type="button" onClick={() => void refreshDatabaseBackups()}>
+                    <RefreshCw size={15} />
+                    Refresh
+                  </button>
+                </div>
+                <div className="update-actions">
+                  <button className="small-button" type="button" onClick={() => void createDatabaseBackupNow()}>
+                    <Save size={15} />
+                    Create Backup
+                  </button>
+                  <button
+                    className="small-button danger"
+                    type="button"
+                    onClick={() => void restoreSelectedDatabaseBackup()}
+                    disabled={!selectedDatabaseBackup}
+                  >
+                    <RefreshCw size={15} />
+                    Restore Selected
+                  </button>
+                </div>
+                <small>{databaseBackupStatus}</small>
             </section>
 
             <section className="home-card company-info-card about-company-card">
@@ -7013,11 +7728,15 @@ function App() {
                       className="table-preview-chip"
                       key={tableName}
                       type="button"
-                      title={`Show QR for ${tableName}`}
-                      onClick={() => void openTableQrPreview(tableName)}
+                      title={hasCloudFeatureAccess && hasGoldLocalPlan ? `Show QR for ${tableName}` : 'QR requires Gold local POS server'}
+                      onClick={() => {
+                        if (hasCloudFeatureAccess && hasGoldLocalPlan) {
+                          void openTableQrPreview(tableName)
+                        }
+                      }}
                     >
                       <span>{tableName}</span>
-                      <QrCode size={15} />
+                      {hasCloudFeatureAccess && hasGoldLocalPlan && <QrCode size={15} />}
                     </button>
                   ))}
                 </div>
@@ -7677,13 +8396,49 @@ function App() {
                     onChange={(event) => setOrderListDate(event.currentTarget.value)}
                   />
                 </label>
-                <strong>{formatDate(selectedOrderListDay)}</strong>
+                <div className="orders-total-summary">
+                  <span>{formatDate(selectedOrderListDay)}</span>
+                  <strong>Total {money(visibleOrdersTotal)}</strong>
+                  <small>Selected {selectedVisibleOrders.length} / {money(selectedOrdersTotal)}</small>
+                </div>
               </div>
             )}
+
+            <div className="orders-select-toolbar">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={allVisibleOrdersSelected}
+                  disabled={!visibleOrders.length}
+                  onChange={toggleAllVisibleOrders}
+                />
+                Select
+              </label>
+              <div>
+                <span>{selectedVisibleOrders.length} selected</span>
+                <strong>{money(selectedOrdersTotal)}</strong>
+              </div>
+              <button
+                className="small-button danger"
+                type="button"
+                disabled={!selectedVisibleOrders.length}
+                onClick={deleteSelectedOrders}
+              >
+                <Trash2 size={16} />
+                Delete Selected
+              </button>
+            </div>
 
             <div className="orders-list">
               {visibleOrders.map((order) => (
                 <article className={`saved-order ${order.status}`} key={order.id}>
+                  <label className="order-select-cell" title={`Select bill ${order.billNo}`}>
+                    <input
+                      type="checkbox"
+                      checked={selectedOrderIds.includes(order.id)}
+                      onChange={() => toggleOrderSelection(order.id)}
+                    />
+                  </label>
                   <div>
                     <span>Bill #{order.billNo}</span>
                     <strong>{order.orderType} {order.table ? `/ ${order.table}` : ''}</strong>
@@ -7702,9 +8457,6 @@ function App() {
                   </div>
                   <button type="button" className="small-button primary" onClick={() => loadOrder(order)}>
                     Open
-                  </button>
-                  <button type="button" className="small-button" onClick={() => deleteOrder(order.id)}>
-                    <Trash2 size={16} />
                   </button>
                 </article>
               ))}
@@ -7738,6 +8490,10 @@ function App() {
                 <strong>{money(report.salesTotal)}</strong>
               </div>
               <div className="report-card">
+                <span>Amount Received</span>
+                <strong>{money(report.receivedTotal)}</strong>
+              </div>
+              <div className="report-card">
                 <span>Today Cash In Hand</span>
                 <strong>{money(report.todayCashInHand)}</strong>
               </div>
@@ -7758,22 +8514,22 @@ function App() {
             <div className="report-columns">
               <section>
                 <h3>Payment Summary</h3>
-                {paymentMethods.map((method) => (
-                  <div className="report-line" key={method}>
-                    <span>{method}</span>
-                    <strong>{money(report.paymentTotals[method] ?? 0)}</strong>
-                  </div>
-                ))}
-              </section>
-              <section>
-                <h3>Top Items</h3>
-                {report.topItems.map((item) => (
-                  <div className="report-line" key={item.name}>
-                    <span>{item.name} x {item.qty}</span>
-                    <strong>{money(item.total)}</strong>
-                  </div>
-                ))}
-                {!report.topItems.length && <div className="empty-list">Save bills to build item report</div>}
+                <div className="report-line">
+                  <span>Cash</span>
+                  <strong>{money(report.cashReceivedTotal)}</strong>
+                </div>
+                <div className="report-line">
+                  <span>UPI</span>
+                  <strong>{money(report.upiTotal)}</strong>
+                </div>
+                <div className="report-line">
+                  <span>Card</span>
+                  <strong>{money(report.cardTotal)}</strong>
+                </div>
+                <div className="report-line">
+                  <span>Due / Credit</span>
+                  <strong>{money(report.balanceTotal)}</strong>
+                </div>
               </section>
             </div>
           </div>
@@ -7813,7 +8569,7 @@ function App() {
                   </span>
                 </button>
               )}
-              {hasPermission('cloud_sync') && (
+              {hasCloudFeatureAccess && hasPermission('cloud_sync') && (
                 <button type="button" onClick={() => openAccountView('sync')}>
                   <Wifi size={20} />
                   <span>
@@ -7834,6 +8590,12 @@ function App() {
             </div>
 
             <div className="account-panel-actions">
+              {hasPermission('user_manage') && (
+                <button className="small-button danger" type="button" onClick={() => void completeActivationLogout()}>
+                  <LogOut size={16} />
+                  Complete Logout
+                </button>
+              )}
               <button className="small-button" type="button" onClick={() => setAccountPanelOpen(false)}>
                 Close
               </button>
@@ -7868,7 +8630,6 @@ function App() {
 
                 <div className="inline-form">
                   <input
-                    placeholder="Category name"
                     value={categoryName}
                     onChange={(event) => setCategoryName(event.target.value)}
                     onKeyDown={(event) => {
@@ -7962,16 +8723,21 @@ function App() {
                   <label>
                     Item Name
                     <input
-                      placeholder="Porotta"
                       value={itemDraft.name}
-                      onChange={(event) => setItemDraft((draft) => ({ ...draft, name: event.target.value }))}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value
+                        setItemDraft((draft) => ({ ...draft, name: value }))
+                      }}
                     />
                   </label>
                   <label>
                     Category
                     <select
                       value={itemDraft.category}
-                      onChange={(event) => setItemDraft((draft) => ({ ...draft, category: event.target.value }))}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value
+                        setItemDraft((draft) => ({ ...draft, category: value }))
+                      }}
                     >
                       {editableCategories.map((category) => (
                         <option key={category.id} value={category.id}>
@@ -7985,9 +8751,11 @@ function App() {
                     <input
                       type="number"
                       min="0"
-                      placeholder="15"
                       value={itemDraft.price}
-                      onChange={(event) => setItemDraft((draft) => ({ ...draft, price: event.target.value }))}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value
+                        setItemDraft((draft) => ({ ...draft, price: value }))
+                      }}
                     />
                     {itemDraft.price.trim() !== '' && Number(itemDraft.price) === 0 && (
                       <span className="item-price-help">
@@ -8001,17 +8769,21 @@ function App() {
                       type="number"
                       min="0"
                       max="100"
-                      placeholder={`Default (${businessProfile.defaultGstRate}%)`}
                       value={itemDraft.taxRate}
-                      onChange={(event) => setItemDraft((draft) => ({ ...draft, taxRate: event.target.value }))}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value
+                        setItemDraft((draft) => ({ ...draft, taxRate: value }))
+                      }}
                     />
                   </label>
                   <label>
                     Tags
                     <input
-                      placeholder="special, hot"
                       value={itemDraft.tags}
-                      onChange={(event) => setItemDraft((draft) => ({ ...draft, tags: event.target.value }))}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value
+                        setItemDraft((draft) => ({ ...draft, tags: value }))
+                      }}
                     />
                   </label>
                   <label className="toggle-field">
@@ -8033,11 +8805,11 @@ function App() {
                     <label className="wide-field">
                       Unavailable Reason
                       <input
-                        placeholder="Sold out, not prepared today"
                         value={itemDraft.unavailableReason}
-                        onChange={(event) =>
-                          setItemDraft((draft) => ({ ...draft, unavailableReason: event.target.value }))
-                        }
+                        onChange={(event) => {
+                          const value = event.currentTarget.value
+                          setItemDraft((draft) => ({ ...draft, unavailableReason: value }))
+                        }}
                       />
                     </label>
                   )}
@@ -8588,6 +9360,291 @@ function printReportInBrowser(payload: ReportPrintPayload) {
   printWindow.print()
 }
 
+function openReportExportPrintWindow(html: string) {
+  const printWindow = window.open('', '_blank', 'width=900,height=1200')
+
+  if (!printWindow) {
+    throw new Error('Export window blocked')
+  }
+
+  printWindow.document.open()
+  printWindow.document.write(html)
+  printWindow.document.close()
+  printWindow.focus()
+  printWindow.print()
+}
+
+function downloadTextFile(fileName: string, content: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+function buildReportExportFileName(data: ReportExportData) {
+  return safeReportFileName(`${data.businessName}-${data.period.label}-report`)
+}
+
+function safeReportFileName(value: string) {
+  const cleaned = Array.from(value)
+    .map((char) => (char.charCodeAt(0) < 32 ? '-' : char))
+    .join('')
+    .replace(/[<>:"/\\|?*]/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 120)
+
+  return cleaned || 'GI-POS-Report'
+}
+
+function buildReportCsv(data: ReportExportData) {
+  const report = data.reportData
+  const rows: string[][] = [
+    ['GI POS Restaurant Report'],
+    ['Business', data.businessName],
+    ['Branch', data.businessProfile.branch],
+    ['Phone', data.businessProfile.phone],
+    ['Period', data.period.label],
+    ['Generated At', formatDateTime(new Date(data.generatedAt))],
+    [],
+    ['Summary', 'Value'],
+    ['Total Sales', money(report.salesTotal)],
+    ['Amount Received', money(report.receivedTotal)],
+    ['Paid Bills', String(report.paidCount)],
+    ['Opening Cash', money(data.openingCash)],
+    ['Cash Received', money(report.cashReceivedTotal)],
+    ['Cash In Hand', money(data.openingCash + report.cashInHand)],
+    ['UPI', money(report.upiTotal)],
+    ['Card', money(report.cardTotal)],
+    ['Bank', money(report.bankTotal)],
+    ['Due / Credit', money(report.balanceTotal)],
+    ['Discount', money(report.discountTotal)],
+    ['Expense', money(report.expenseTotal)],
+    ['Net Amount', money(report.netTotal)],
+    ['Open Amount', money(report.openTotal)],
+    ['Open Bills', String(report.openCount)],
+    [],
+    ['Payment Summary', 'Amount'],
+    ...paymentMethods.map((method) => [method, money(report.paymentTotals[method] ?? 0)]),
+    [],
+    ['Order Type', 'Count', 'Total'],
+    ...orderTypes.map((type) => [
+      type,
+      String(report.orderTypeTotals[type].count),
+      money(report.orderTypeTotals[type].total),
+    ]),
+    [],
+    ['Top Items', 'Qty', 'Total'],
+    ...report.topItems.map((item) => [item.name, String(item.qty), money(item.total)]),
+    [],
+    ['Bill Details'],
+    ['Bill No', 'Date', 'Type', 'Table', 'Customer', 'Payment', 'Status', 'Items', 'Subtotal', 'Discount', 'Tax', 'Total', 'Paid', 'Due', 'Cash', 'UPI', 'Card'],
+    ...data.orders.map((order) => [
+      order.billNo,
+      formatDateTime(new Date(order.createdAt)),
+      order.orderType,
+      order.table,
+      order.customer,
+      order.paymentMethod,
+      order.status,
+      String(order.cart.reduce((sum, line) => sum + line.qty, 0)),
+      money(order.totals.subtotal),
+      money(order.totals.discount),
+      money(order.totals.tax),
+      money(order.totals.total),
+      money(order.totals.paid),
+      money(order.totals.balance),
+      money(order.paymentBreakdown?.cash ?? getOrderCashInHand(order)),
+      money(order.paymentBreakdown?.upi ?? getOrderUpiReceived(order)),
+      money(order.paymentBreakdown?.card ?? getOrderCardReceived(order)),
+    ]),
+    [],
+    ['Expense Details'],
+    ['Date', 'Category', 'Payment', 'Amount', 'Vendor', 'Note'],
+    ...data.expenses.map((expense) => [
+      expense.date,
+      expense.category,
+      expense.paymentMethod,
+      money(expense.amount),
+      expense.vendor,
+      expense.note,
+    ]),
+  ]
+
+  return rows.map((row) => row.map(escapeCsvValue).join(',')).join('\r\n')
+}
+
+function buildReportExportHtml(data: ReportExportData, format: 'excel' | 'pdf') {
+  const report = data.reportData
+  const cashInHandWithOpening = roundMoney(data.openingCash + report.cashInHand)
+  const title = `${data.businessName} - ${data.period.label} Report`
+  const summaryRows = [
+    ['Total Sales', money(report.salesTotal)],
+    ['Amount Received', money(report.receivedTotal)],
+    ['Paid Bills', String(report.paidCount)],
+    ['Opening Cash', money(data.openingCash)],
+    ['Cash Received', money(report.cashReceivedTotal)],
+    ['Cash In Hand', money(cashInHandWithOpening)],
+    ['UPI', money(report.upiTotal)],
+    ['Card', money(report.cardTotal)],
+    ['Bank', money(report.bankTotal)],
+    ['Due / Credit', money(report.balanceTotal)],
+    ['Discount', money(report.discountTotal)],
+    ['Expense', money(report.expenseTotal)],
+    ['Net Amount', money(report.netTotal)],
+    ['Open Amount', money(report.openTotal)],
+    ['Open Bills', String(report.openCount)],
+  ]
+  const paymentRows = paymentMethods.map((method) => [method, money(report.paymentTotals[method] ?? 0)])
+  const orderTypeRows = orderTypes.map((type) => [
+    `${type} x ${report.orderTypeTotals[type].count}`,
+    money(report.orderTypeTotals[type].total),
+  ])
+  const extensionMeta =
+    format === 'excel'
+      ? '<meta http-equiv="Content-Type" content="application/vnd.ms-excel; charset=utf-8" />'
+      : ''
+
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    ${extensionMeta}
+    <title>${escapePrintHtml(title)}</title>
+    <style>
+      @page { size: A4; margin: 10mm; }
+      * { box-sizing: border-box; }
+      body { margin: 0; color: #111827; font-family: Arial, sans-serif; font-size: 12px; background: #fff; }
+      .report-page { width: 100%; }
+      .header { display: flex; justify-content: space-between; gap: 18px; padding-bottom: 12px; border-bottom: 2px solid #111827; }
+      .brand h1 { margin: 0; font-size: 24px; letter-spacing: 0; }
+      .brand p, .meta p { margin: 4px 0 0; color: #475569; font-weight: 700; }
+      .meta { text-align: right; }
+      .meta strong { display: block; font-size: 16px; }
+      .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 14px 0; }
+      .kpi { padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; }
+      .kpi span { display: block; color: #64748b; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+      .kpi strong { display: block; margin-top: 5px; font-size: 18px; }
+      .section { margin-top: 14px; page-break-inside: avoid; }
+      h2 { margin: 0 0 8px; font-size: 15px; }
+      table { width: 100%; border-collapse: collapse; }
+      th { color: #0f172a; background: #e2e8f0; font-size: 10px; text-transform: uppercase; }
+      th, td { padding: 7px 8px; border: 1px solid #cbd5e1; text-align: left; vertical-align: top; }
+      td.number, th.number { text-align: right; white-space: nowrap; }
+      .split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .empty { padding: 10px; color: #64748b; border: 1px solid #cbd5e1; border-radius: 6px; }
+      @media print {
+        body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+        .section { break-inside: avoid; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="report-page">
+      <header class="header">
+        <div class="brand">
+          <h1>${escapePrintHtml(data.businessName)}</h1>
+          ${data.businessProfile.branch ? `<p>${escapePrintHtml(data.businessProfile.branch)}</p>` : ''}
+          ${data.businessProfile.phone ? `<p>Phone: ${escapePrintHtml(data.businessProfile.phone)}</p>` : ''}
+        </div>
+        <div class="meta">
+          <strong>Sales Report</strong>
+          <p>${escapePrintHtml(data.period.label)}</p>
+          <p>Generated: ${escapePrintHtml(formatDateTime(new Date(data.generatedAt)))}</p>
+        </div>
+      </header>
+
+      <section class="summary">
+        <div class="kpi"><span>Total Sales</span><strong>Rs. ${money(report.salesTotal)}</strong></div>
+        <div class="kpi"><span>Received</span><strong>Rs. ${money(report.receivedTotal)}</strong></div>
+        <div class="kpi"><span>Cash In Hand</span><strong>Rs. ${money(cashInHandWithOpening)}</strong></div>
+        <div class="kpi"><span>Bank</span><strong>Rs. ${money(report.bankTotal)}</strong></div>
+      </section>
+
+      <section class="split">
+        ${renderExportTable('Summary', ['Metric', 'Value'], summaryRows)}
+        ${renderExportTable('Payment Summary', ['Method', 'Amount'], paymentRows)}
+      </section>
+
+      <section class="split">
+        ${renderExportTable('Order Type', ['Type', 'Total'], orderTypeRows)}
+        ${renderExportTable('Top Items', ['Item', 'Qty', 'Total'], report.topItems.map((item) => [item.name, String(item.qty), money(item.total)]))}
+      </section>
+
+      ${renderExportTable(
+        'Bill Details',
+        ['Bill', 'Date', 'Type', 'Table', 'Customer', 'Payment', 'Status', 'Items', 'Subtotal', 'Discount', 'Tax', 'Total', 'Paid', 'Due'],
+        data.orders.map((order) => [
+          `#${order.billNo}`,
+          formatDateTime(new Date(order.createdAt)),
+          order.orderType,
+          order.table,
+          order.customer,
+          order.paymentMethod,
+          order.status,
+          String(order.cart.reduce((sum, line) => sum + line.qty, 0)),
+          money(order.totals.subtotal),
+          money(order.totals.discount),
+          money(order.totals.tax),
+          money(order.totals.total),
+          money(order.totals.paid),
+          money(order.totals.balance),
+        ]),
+        [8, 9, 10, 11, 12, 13],
+      )}
+
+      ${renderExportTable(
+        'Expense Details',
+        ['Date', 'Category', 'Payment', 'Amount', 'Vendor', 'Note'],
+        data.expenses.map((expense) => [
+          expense.date,
+          expense.category,
+          expense.paymentMethod,
+          money(expense.amount),
+          expense.vendor,
+          expense.note,
+        ]),
+        [3],
+      )}
+    </main>
+  </body>
+</html>`
+}
+
+function renderExportTable(title: string, headers: string[], rows: string[][], numberColumns: number[] = [1]) {
+  const headerHtml = headers
+    .map((header, index) => `<th class="${numberColumns.includes(index) ? 'number' : ''}">${escapePrintHtml(header)}</th>`)
+    .join('')
+  const bodyHtml = rows
+    .map(
+      (row) =>
+        `<tr>${row
+          .map((cell, index) => `<td class="${numberColumns.includes(index) ? 'number' : ''}">${escapePrintHtml(cell)}</td>`)
+          .join('')}</tr>`,
+    )
+    .join('')
+
+  return `<section class="section">
+    <h2>${escapePrintHtml(title)}</h2>
+    ${
+      rows.length
+        ? `<table><thead><tr>${headerHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>`
+        : `<div class="empty">No data found</div>`
+    }
+  </section>`
+}
+
+function escapeCsvValue(value: string) {
+  const normalized = String(value ?? '')
+  return /[",\r\n]/.test(normalized) ? `"${normalized.replace(/"/g, '""')}"` : normalized
+}
+
 function buildReportPrintHtml(payload: ReportPrintPayload) {
   const report = payload.report
   const orderTypeRows = report.orderTypeRows
@@ -8628,6 +9685,7 @@ function buildReportPrintHtml(payload: ReportPrintPayload) {
     <table>
       <tr class="grand"><td>Total Sales</td><td>${money(report.salesTotal)}</td></tr>
       <tr><td>Paid Bills</td><td>${report.paidCount}</td></tr>
+      <tr><td>Opening Cash</td><td>${money(report.openingCash)}</td></tr>
       <tr><td>Cash In Hand</td><td>${money(report.cashInHand)}</td></tr>
       <tr><td>UPI</td><td>${money(report.upiTotal)}</td></tr>
       <tr><td>Card</td><td>${money(report.cardTotal)}</td></tr>
@@ -8635,7 +9693,6 @@ function buildReportPrintHtml(payload: ReportPrintPayload) {
       <tr><td>Due / Credit</td><td>${money(report.balanceTotal)}</td></tr>
       <tr><td>Discount</td><td>${money(report.discountTotal)}</td></tr>
       <tr><td>Expense</td><td>${money(report.expenseTotal)}</td></tr>
-      <tr><td>Cash Expense</td><td>${money(report.cashExpenseTotal)}</td></tr>
       <tr><td>Bank Expense</td><td>${money(report.bankExpenseTotal)}</td></tr>
       <tr class="grand"><td>Net Amount</td><td>${money(report.netTotal)}</td></tr>
       <tr><td>Open Amount</td><td>${money(report.openTotal)}</td></tr>
@@ -8683,6 +9740,31 @@ function formatDateTime(value: Date) {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+function formatLicenseDate(value: string) {
+  if (!value) {
+    return 'Not set'
+  }
+
+  const date = new Date(value)
+  return Number.isFinite(date.getTime()) ? formatDateTime(date) : value
+}
+
+function formatFileSize(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '0 B'
+  }
+
+  if (bytes < 1024) {
+    return `${bytes} B`
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`
+  }
+
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 function formatInputDate(value: Date) {
@@ -8866,6 +9948,14 @@ function isSameBusinessDay(value: string, day: Date) {
   )
 }
 
+function isSingleDayReportPeriod(period: ReportPeriod) {
+  return (
+    period.from.getFullYear() === period.to.getFullYear() &&
+    period.from.getMonth() === period.to.getMonth() &&
+    period.from.getDate() === period.to.getDate()
+  )
+}
+
 function getBusinessInitials(value: string) {
   const letters = value
     .split(/\s+/)
@@ -9042,6 +10132,20 @@ function normalizeExpenses(entries: ExpenseEntry[]) {
     .filter((entry): entry is ExpenseEntry => Boolean(entry))
 }
 
+function normalizeOpeningCashBalances(value: Record<string, number> | unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+
+  return Object.entries(value).reduce<Record<string, number>>((balances, [dateKey, amount]) => {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+      balances[dateKey] = roundMoney(Math.max(0, Number(amount) || 0))
+    }
+
+    return balances
+  }, {})
+}
+
 function createStaffUserId() {
   return `staff-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
@@ -9050,8 +10154,8 @@ function createPrinterProfileId() {
   return `printer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-function getInitialBillNumber(orders: SavedOrder[]) {
-  const highestSavedBill = getHighestBillNumber(orders)
+function getInitialBillNumber(orders: SavedOrder[], referenceDate = new Date()) {
+  const highestSavedBill = getHighestBillNumber(orders, referenceDate)
 
   if (highestSavedBill > 0) {
     return highestSavedBill + 1
@@ -9060,12 +10164,41 @@ function getInitialBillNumber(orders: SavedOrder[]) {
   return firstBillNumber
 }
 
-function getNextBillNumber(orders: SavedOrder[], currentBillNumber: number) {
-  return Math.max(currentBillNumber, getHighestBillNumber(orders), firstBillNumber - 1) + 1
+function getNextBillNumber(orders: SavedOrder[], currentBillNumber: number, referenceDate = new Date()) {
+  const highestSavedBill = getHighestBillNumber(orders, referenceDate)
+  return Math.max(currentBillNumber, highestSavedBill, firstBillNumber - 1) + 1
 }
 
-function getHighestBillNumber(orders: SavedOrder[]) {
-  return orders.reduce((highest, order) => Math.max(highest, Number(order.billNo) || 0), 0)
+function getHighestBillNumber(orders: SavedOrder[], referenceDate = new Date()) {
+  return orders
+    .filter((order) => isOrderInsideFinancialYear(order, referenceDate))
+    .reduce((highest, order) => Math.max(highest, Number(order.billNo) || 0), 0)
+}
+
+function isOrderInsideFinancialYear(order: SavedOrder, referenceDate = new Date()) {
+  const orderDate = new Date(order.createdAt || order.updatedAt)
+  if (!Number.isFinite(orderDate.getTime())) {
+    return false
+  }
+
+  const start = getFinancialYearStart(referenceDate)
+  const end = getFinancialYearEnd(referenceDate)
+  return orderDate >= start && orderDate <= end
+}
+
+function getFinancialYearStart(value: Date) {
+  const year = value.getMonth() >= 3 ? value.getFullYear() : value.getFullYear() - 1
+  return new Date(year, 3, 1, 0, 0, 0, 0)
+}
+
+function getFinancialYearEnd(value: Date) {
+  const start = getFinancialYearStart(value)
+  return new Date(start.getFullYear() + 1, 2, 31, 23, 59, 59, 999)
+}
+
+function getFinancialYearKey(value: Date) {
+  const start = getFinancialYearStart(value)
+  return `${start.getFullYear()}-${start.getFullYear() + 1}`
 }
 
 function buildReport(orders: SavedOrder[], period?: ReportPeriod, expenses: ExpenseEntry[] = []) {
@@ -9130,6 +10263,8 @@ function buildReport(orders: SavedOrder[], period?: ReportPeriod, expenses: Expe
   const bankSalesTotal = roundMoney(paidOrders.reduce((sum, order) => sum + getOrderBankReceived(order), 0))
   const todayCashSalesTotal = roundMoney(todayPaidOrders.reduce((sum, order) => sum + getOrderCashInHand(order), 0))
   const todayBankSalesTotal = roundMoney(todayPaidOrders.reduce((sum, order) => sum + getOrderBankReceived(order), 0))
+  const receivedTotal = roundMoney(cashSalesTotal + bankSalesTotal)
+  const todayReceivedTotal = roundMoney(todayCashSalesTotal + todayBankSalesTotal)
   const previousSalesTotal = roundMoney(previousPaidOrders.reduce((sum, order) => sum + order.totals.total, 0))
   const variationPercent = previousSalesTotal
     ? roundMoney(((salesTotal - previousSalesTotal) / previousSalesTotal) * 100)
@@ -9142,11 +10277,15 @@ function buildReport(orders: SavedOrder[], period?: ReportPeriod, expenses: Expe
     previousSalesTotal,
     variationPercent,
     todaySales: roundMoney(todayPaidOrders.reduce((sum, order) => sum + order.totals.total, 0)),
+    todayReceivedTotal,
     todayExpenseTotal,
     todayCashExpenseTotal,
     todayBankExpenseTotal,
     todayCashInHand: roundMoney(todayCashSalesTotal - todayCashExpenseTotal),
     todayBank: roundMoney(todayBankSalesTotal - todayBankExpenseTotal),
+    receivedTotal,
+    cashReceivedTotal: cashSalesTotal,
+    bankReceivedTotal: bankSalesTotal,
     cashInHand: roundMoney(cashSalesTotal - cashExpenseTotal),
     upiTotal: roundMoney(paidOrders.reduce((sum, order) => sum + getOrderUpiReceived(order), 0)),
     cardTotal: roundMoney(paidOrders.reduce((sum, order) => sum + getOrderCardReceived(order), 0)),
@@ -9371,6 +10510,72 @@ function persistStoredValue(key: string, value: unknown, storageReady: boolean, 
 
 function normalizeApiUrl(value: string) {
   return value.trim().replace(/\/+$/, '')
+}
+
+function normalizeAppMode(value: unknown): AppMode {
+  return String(value || '').trim().toLowerCase() === 'offline' ? 'offline' : 'cloud'
+}
+
+function normalizeOfflineLicense(value: Partial<OfflineLicense> | null | undefined): OfflineLicense | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  const license: OfflineLicense = {
+    plan: 'offline',
+    licenseId: String(value.licenseId || ''),
+    licenseKey: String(value.licenseKey || ''),
+    businessName: String(value.businessName || ''),
+    phone: String(value.phone || ''),
+    deviceFingerprint: String(value.deviceFingerprint || ''),
+    deviceName: String(value.deviceName || ''),
+    activatedAt: String(value.activatedAt || ''),
+    expiresAt: String(value.expiresAt || ''),
+    issuedAt: String(value.issuedAt || ''),
+    signature: String(value.signature || ''),
+    subscriptionPlan: String(value.subscriptionPlan || ''),
+    subscriptionStatus: String(value.subscriptionStatus || ''),
+    subscriptionExpiresAt: String(value.subscriptionExpiresAt || value.expiresAt || ''),
+    subscriptionMaxDevices: Number(value.subscriptionMaxDevices || 0),
+  }
+
+  return license.licenseKey && license.businessName && license.phone && license.deviceFingerprint && license.signature
+    ? license
+    : null
+}
+
+function isOfflineLicenseValid(license: OfflineLicense | null): license is OfflineLicense {
+  if (!license) {
+    return false
+  }
+
+  if (license.plan !== 'offline' || !license.licenseKey || !license.signature) {
+    return false
+  }
+
+  if (license.expiresAt) {
+    const expiresAt = new Date(license.expiresAt).getTime()
+    if (!Number.isNaN(expiresAt) && expiresAt < Date.now()) {
+      return false
+    }
+  }
+
+  const deviceFingerprint = localStorage.getItem(deviceFingerprintStorageKey) || ''
+  return !deviceFingerprint || !license.deviceFingerprint || license.deviceFingerprint === deviceFingerprint
+}
+
+function getOrCreateDeviceFingerprint() {
+  const existing = localStorage.getItem(deviceFingerprintStorageKey)
+  if (existing) {
+    return existing
+  }
+
+  const next =
+    typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `device-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  localStorage.setItem(deviceFingerprintStorageKey, next)
+  return next
 }
 
 function isLocalCloudUrl(value: string) {
@@ -9801,6 +11006,7 @@ function titleCase(value: string) {
 function getAppPlanId(planName = ''): keyof typeof appPlanCatalog | '' {
   const normalized = planName.trim().toLowerCase()
   if (normalized.includes('gold')) return 'gold'
+  if (normalized.includes('offline')) return 'offline'
   if (normalized.includes('premium')) return 'premium'
   return ''
 }

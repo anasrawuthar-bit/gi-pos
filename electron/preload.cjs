@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('posPrinter', {
   listPrinters: () => ipcRenderer.invoke('printer:list'),
   printReceipt: (payload) => ipcRenderer.invoke('receipt:print', payload),
   printReport: (payload) => ipcRenderer.invoke('report:print', payload),
+  exportReportPdf: (payload) => ipcRenderer.invoke('report:export-pdf', payload),
   printTest: (settings) => ipcRenderer.invoke('receipt:print-test', settings),
   printKot: (payload) => ipcRenderer.invoke('kot:print', payload),
   printKotTest: (payload) => ipcRenderer.invoke('kot:print-test', payload),
@@ -18,6 +19,9 @@ contextBridge.exposeInMainWorld('posDb', {
   clearPendingSync: () => ipcRenderer.invoke('db:sync-clear-pending'),
   applyRemoteValues: (entries) => ipcRenderer.invoke('db:apply-remote-values', entries),
   resetAll: () => ipcRenderer.invoke('db:reset-all'),
+  createBackup: () => ipcRenderer.invoke('db:backup-create'),
+  listBackups: () => ipcRenderer.invoke('db:backup-list'),
+  restoreBackup: (fileName) => ipcRenderer.invoke('db:backup-restore', fileName),
 });
 
 contextBridge.exposeInMainWorld('posUpdater', {
@@ -33,4 +37,5 @@ contextBridge.exposeInMainWorld('posUpdater', {
 
 contextBridge.exposeInMainWorld('posServer', {
   getStatus: () => ipcRenderer.invoke('lan-server:status'),
+  stop: () => ipcRenderer.invoke('lan-server:stop'),
 });

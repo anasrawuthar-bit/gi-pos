@@ -16,6 +16,8 @@ export type ReceiptPrinterSettings = {
 export type LocalDbSnapshot = {
   engine: 'sqlite'
   path: string
+  dataDir?: string
+  backupDir?: string
   values: Record<string, string>
 }
 
@@ -33,6 +35,14 @@ export type LocalDbSyncChange = {
   operation: string
   payload: unknown
   createdAt: string
+}
+
+export type LocalDbBackup = {
+  fileName: string
+  path: string
+  size: number
+  createdAt: string
+  updatedAt: string
 }
 
 export type AppUpdateStatus = {
@@ -85,6 +95,10 @@ declare global {
       listPrinters: () => Promise<PrinterInfo[]>
       printReceipt: (payload: unknown) => Promise<{ ok: boolean; mode: string }>
       printReport: (payload: unknown) => Promise<{ ok: boolean; mode: string }>
+      exportReportPdf: (payload: {
+        html: string
+        defaultFileName: string
+      }) => Promise<{ ok: boolean; path?: string; canceled?: boolean }>
       printTest: (settings: ReceiptPrinterSettings) => Promise<{ ok: boolean; mode: string }>
       printKot: (payload: unknown) => Promise<{ ok: boolean; mode: string }>
       printKotTest: (payload: unknown) => Promise<{ ok: boolean; mode: string }>
@@ -100,6 +114,9 @@ declare global {
         entries: Array<{ key: string; value: string; updatedAt?: string }>,
       ) => Promise<LocalDbWriteResult>
       resetAll: () => Promise<LocalDbWriteResult>
+      createBackup: () => Promise<{ ok: boolean; path: string; fileName: string; updatedAt: string }>
+      listBackups: () => Promise<{ ok: boolean; backups: LocalDbBackup[] }>
+      restoreBackup: (fileName: string) => Promise<{ ok: boolean; path: string; restoredFrom: string; updatedAt: string }>
     }
     posUpdater?: {
       getStatus: () => Promise<AppUpdateStatus>
@@ -109,6 +126,7 @@ declare global {
     }
     posServer?: {
       getStatus: () => Promise<LocalServerStatus>
+      stop: () => Promise<{ ok: boolean }>
     }
   }
 }
