@@ -921,20 +921,20 @@ button {
 }
 
 .customer-panel {
-  width: min(1040px, calc(100vw - 32px));
+  width: min(1080px, calc(100vw - 32px));
   grid-template-rows: auto auto minmax(0, 1fr);
-  gap: 14px;
+  gap: 12px;
 }
 
 .customer-stat-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 10px;
 }
 
 .customer-stat-grid div {
   min-width: 0;
-  padding: 10px;
+  padding: 11px 12px;
   color: #4b5563;
   background: #f8fafc;
   border: 1px solid #d7dce3;
@@ -957,9 +957,9 @@ button {
 
 .customer-workspace {
   min-height: 0;
-  height: min(590px, calc(100vh - 205px));
+  height: min(560px, calc(100vh - 205px));
   display: grid;
-  grid-template-columns: 390px minmax(0, 1fr);
+  grid-template-columns: 380px minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -969,8 +969,8 @@ button {
   display: grid;
   align-content: start;
   gap: 10px;
-  padding: 12px;
-  background: #f8fafc;
+  padding: 14px;
+  background: #ffffff;
   border: 1px solid #d7dce3;
   border-radius: 7px;
 }
@@ -1050,31 +1050,60 @@ button {
 
 .customer-picker-list {
   display: grid;
+  align-content: start;
+  grid-auto-rows: min-content;
   gap: 6px;
   min-height: 0;
+  padding-right: 3px;
   overflow-y: auto;
 }
 
-.customer-picker-list button {
+.customer-picker-row {
+  min-width: 0;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 8px;
+  align-items: stretch;
+  padding: 8px;
+  color: #111827;
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-left: 4px solid #cbd5e1;
+  border-radius: 6px;
+}
+
+.customer-select-button {
   min-width: 0;
   display: grid;
   gap: 3px;
-  padding: 9px 10px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  text-align: left;
+}
+
+.customer-edit-button {
+  width: 36px;
+  min-width: 36px;
+  display: grid;
+  place-items: center;
   color: #111827;
   background: #f8fafc;
   border: 1px solid #d7dce3;
   border-radius: 6px;
-  text-align: left;
 }
 
-.customer-picker-list button.has-due {
+.customer-picker-row.has-due {
   border-left: 4px solid #dc2626;
 }
 
-.customer-picker-list button.active {
-  color: #ffffff;
-  background: #c1121f;
-  border-color: #a50f1a;
+.customer-picker-row.active {
+  color: #111827;
+  background: #fff1f2;
+  border-color: #c1121f;
+  box-shadow: 0 8px 18px rgba(193, 18, 31, 0.12);
 }
 
 .customer-row-head {
@@ -1110,9 +1139,9 @@ button {
   font-size: 11px;
 }
 
-.customer-picker-list button.active span,
-.customer-picker-list button.active small {
-  color: rgba(255, 255, 255, 0.82);
+.customer-picker-row.active span,
+.customer-picker-row.active small {
+  color: #64748b;
 }
 
 .customer-name-with-badge {
@@ -1136,9 +1165,9 @@ button {
   letter-spacing: 0;
 }
 
-.customer-picker-list button.active .due-badge {
-  color: #dc2626 !important;
-  background: #ffffff;
+.customer-picker-row.active .due-badge {
+  color: #ffffff !important;
+  background: #dc2626;
 }
 
 .customer-list-head {
@@ -1176,9 +1205,10 @@ button {
 
 .customer-summary-card div {
   min-width: 0;
-  padding: 10px;
+  min-height: 62px;
+  padding: 11px 12px;
   color: #4b5563;
-  background: #ffffff;
+  background: #f8fafc;
   border: 1px solid #d7dce3;
   border-radius: 6px;
 }
@@ -1199,8 +1229,77 @@ button {
   white-space: nowrap;
 }
 
+.customer-readonly-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  color: #111827;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 7px;
+}
+
+.customer-readonly-head span {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.customer-readonly-head strong {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: #111827;
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.customer-due-section {
+  min-height: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.customer-due-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.customer-due-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 100px 92px;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+  color: #111827;
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-left: 4px solid #dc2626;
+  border-radius: 6px;
+}
+
+.customer-due-row span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.customer-due-row strong {
+  color: #111827;
+}
+
 .customer-actions {
   margin-top: 4px;
+  flex-wrap: wrap;
 }
 
 .due-paid-button:disabled {
@@ -1212,6 +1311,50 @@ button {
   width: min(620px, calc(100vw - 32px));
   justify-items: center;
   text-align: center;
+}
+
+.access-prompt-layer {
+  z-index: 30;
+}
+
+.access-prompt-panel {
+  width: min(460px, calc(100vw - 32px));
+}
+
+.access-prompt-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 14px;
+  color: #111827;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 7px;
+}
+
+.access-prompt-icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  background: #c1121f;
+  border-radius: 7px;
+}
+
+.access-prompt-body strong {
+  display: block;
+  color: #111827;
+  font-size: 16px;
+}
+
+.access-prompt-body p {
+  margin: 4px 0 0;
+  color: #4b5563;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
 }
 
 .success-icon {
@@ -1369,6 +1512,12 @@ button {
   background: #eef2f7;
   border-radius: 5px;
   font-weight: 800;
+}
+
+.small-button.icon-only {
+  width: 38px;
+  min-width: 38px;
+  padding: 0;
 }
 
 .small-button.primary {
@@ -2873,6 +3022,8 @@ button {
 .pos-shell .customer-list-head strong,
 .pos-shell .customer-stat-grid strong,
 .pos-shell .customer-summary-card strong,
+.pos-shell .customer-readonly-head strong,
+.pos-shell .customer-due-row strong,
 .pos-shell .printer-profile-list strong,
 .pos-shell .profile-status-card strong,
 .pos-shell .part-auto-amount strong {
@@ -2896,6 +3047,8 @@ button {
 .pos-shell .customer-list-head span,
 .pos-shell .customer-stat-grid span,
 .pos-shell .customer-summary-card span,
+.pos-shell .customer-readonly-head span,
+.pos-shell .customer-due-row span,
 .pos-shell .empty-customer-list,
 .pos-shell .printer-profile-list span,
 .pos-shell .profile-status-card span,
@@ -3049,7 +3202,10 @@ button {
 .pos-shell .customer-detail-panel,
 .pos-shell .customer-stat-grid div,
 .pos-shell .customer-summary-card div,
-.pos-shell .customer-picker-list button,
+.pos-shell .customer-picker-row,
+.pos-shell .customer-edit-button,
+.pos-shell .customer-readonly-head,
+.pos-shell .customer-due-row,
 .pos-shell .customer-filter-tabs button,
 .pos-shell .empty-customer-list,
 .pos-shell .printer-profile-sidebar,
@@ -3121,17 +3277,42 @@ button {
   color: var(--text);
 }
 
+.pos-shell .access-prompt-body {
+  color: var(--text);
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
+}
+
+.pos-shell .access-prompt-body strong {
+  color: var(--text);
+}
+
+.pos-shell .access-prompt-body p {
+  color: var(--text-muted);
+}
+
 .pos-shell .quick-filters button.active {
   background: var(--accent);
   border-color: var(--accent-strong);
 }
 
 .pos-shell .part-method-buttons button.active,
-.pos-shell .customer-picker-list button.active,
 .pos-shell .customer-filter-tabs button.active {
   color: #ffffff;
   background: var(--primary);
   border-color: var(--primary-strong);
+}
+
+.pos-shell .customer-picker-row.active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  border-color: var(--primary);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--primary) 14%, transparent);
+}
+
+.pos-shell .customer-picker-row.active span,
+.pos-shell .customer-picker-row.active small {
+  color: var(--text-muted);
 }
 
 .pos-shell .customer-sort-field {
@@ -5658,7 +5839,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  min-height: 138px;
+  min-height: 116px;
   color: #fff;
   background:
     linear-gradient(135deg, rgba(204, 13, 45, 0.92), rgba(7, 132, 142, 0.96)),
@@ -5675,8 +5856,8 @@ button {
 }
 
 .pos-shell .about-brand-mark {
-  width: 70px;
-  height: 70px;
+  width: 62px;
+  height: 62px;
   border: 1px solid rgba(255, 255, 255, 0.25);
   box-shadow: 0 18px 34px rgba(0, 0, 0, 0.2);
   flex: 0 0 auto;
@@ -5693,7 +5874,7 @@ button {
 .pos-shell .about-hero-brand h2 {
   margin: 2px 0 4px;
   color: #fff;
-  font-size: 30px;
+  font-size: 28px;
   line-height: 1.05;
 }
 
@@ -5731,14 +5912,14 @@ button {
   grid-column: 1 / -1;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .pos-shell .about-summary-grid article {
   min-width: 0;
   display: grid;
   gap: 6px;
-  padding: 14px;
+  padding: 12px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -5765,22 +5946,23 @@ button {
 }
 
 .pos-shell .refined-license-panel {
-  grid-column: 1 / span 8;
+  grid-column: 1 / span 7;
   margin-top: 0;
 }
 
 .pos-shell .license-group-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: 1fr;
+  gap: 8px;
 }
 
 .pos-shell .license-group {
   min-width: 0;
   display: grid;
-  align-content: start;
-  gap: 8px;
-  padding: 10px;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 9px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -5809,34 +5991,69 @@ button {
   white-space: nowrap;
 }
 
-.pos-shell .about-update-card {
-  grid-column: 9 / -1;
+.pos-shell .about-service-card {
+  grid-column: 8 / -1;
+  display: grid;
+  gap: 10px;
   margin-top: 0;
+  box-shadow: none;
 }
 
-.pos-shell .about-data-card {
-  grid-column: 9 / -1;
-  margin-top: 0;
+.pos-shell .about-service-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pos-shell .about-service-grid div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.pos-shell .about-service-grid span,
+.pos-shell .about-service-card small {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.pos-shell .about-service-grid strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pos-shell .about-company-card,
 .pos-shell .terms-card {
   grid-column: span 6;
+  min-height: 0;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 5%, transparent), transparent 42px),
+    var(--surface);
+  border-top: 3px solid color-mix(in srgb, var(--accent) 70%, var(--border));
 }
 
 .pos-shell .company-info-card p,
 .pos-shell .company-info-card ul {
   margin: 0;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 1.55;
+  line-height: 1.45;
 }
 
 .pos-shell .company-info-card ul {
   display: grid;
-  gap: 8px;
-  padding-left: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  padding-left: 16px;
 }
 
 .pos-shell .company-info-card li::marker {
@@ -5898,15 +6115,14 @@ button {
   }
 
   .pos-shell .refined-license-panel,
-  .pos-shell .about-update-card,
-  .pos-shell .about-data-card,
+  .pos-shell .about-service-card,
   .pos-shell .about-company-card,
   .pos-shell .terms-card {
     grid-column: 1 / -1;
   }
 
   .pos-shell .license-group-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
   }
 
   .pos-shell .sync-layout {
@@ -5964,7 +6180,12 @@ button {
   }
 
   .pos-shell .about-summary-grid,
-  .pos-shell .license-group-grid {
+  .pos-shell .license-group-grid,
+  .pos-shell .about-service-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pos-shell .license-group {
     grid-template-columns: 1fr;
   }
 

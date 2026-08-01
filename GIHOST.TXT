@@ -1,9 +1,16 @@
 to run locally need to configure PostgreSQL
 
-$env:PORT="8080"; 
+$env:PORT="8090"; 
 $env:DATABASE_URL="postgres://postgres:1234@localhost:5432/pos"; 
 $env:GI_CLOUD_ADMIN_TOKEN="password"; 
 $env:GI_PUBLIC_BASE_URL=""; node src/server.js
+
+
+To migrate db schema to new db
+==============================
+
+psql -U postgres -d restaurant_pos -f schema.sql 
+
 
 GI POS CLOUD HOSTING NOTE
 =========================

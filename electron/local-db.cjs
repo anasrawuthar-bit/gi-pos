@@ -6,7 +6,9 @@ const initSqlJs = require('sql.js');
 const DB_FILE_NAME = 'gi-pos-local.sqlite';
 const DATA_DIR_NAME = 'GIPOS Restaurant';
 const BACKUP_DIR_NAME = 'Backups';
-const MAX_AUTO_BACKUPS = 30;
+const MAX_AUTO_BACKUPS = 8;
+const MAX_MANUAL_BACKUPS = 10;
+const AUTO_BACKUP_MIN_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const SYNCABLE_KV_KEYS = new Set([
   'pos-business-profile',
   'pos-categories',
@@ -246,6 +248,7 @@ async function createLocalDatabase(app) {
       return { ok: true, path: backup.path, fileName: backup.fileName, updatedAt: new Date().toISOString() };
     },
     listBackups() {
+      pruneBackups(backupDir);
       return { ok: true, backups: listDatabaseBackups(backupDir) };
     },
     restoreBackup(fileName) {
@@ -333,13 +336,37 @@ function createDatabaseBackup(dbPath, backupDir, reason) {
   }
 
   fs.mkdirSync(backupDir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-');
   const safeReason = String(reason || 'backup').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+  const recentBackup = getRecentAutomaticBackup(backupDir, safeReason);
+
+  if (recentBackup) {
+    pruneBackups(backupDir);
+    return { path: recentBackup.path, fileName: recentBackup.fileName, skipped: true };
+  }
+
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-');
   const fileName = `gi-pos-${safeReason}-${stamp}.sqlite`;
   const backupPath = path.join(backupDir, fileName);
   fs.copyFileSync(dbPath, backupPath);
-  pruneAutoBackups(backupDir);
+  pruneBackups(backupDir);
   return { path: backupPath, fileName };
+}
+
+function getRecentAutomaticBackup(backupDir, reason) {
+  if (reason !== 'startup' && reason !== 'close') {
+    return null;
+  }
+
+  const latestAutoBackup = listDatabaseBackups(backupDir).find(
+    (backup) => !isManualBackup(backup.fileName) && !isCorruptBackup(backup.fileName),
+  );
+
+  if (!latestAutoBackup) {
+    return null;
+  }
+
+  const ageMs = Date.now() - new Date(latestAutoBackup.updatedAt).getTime();
+  return ageMs >= 0 && ageMs < AUTO_BACKUP_MIN_INTERVAL_MS ? latestAutoBackup : null;
 }
 
 function createCorruptCopy(dbPath, backupDir) {
@@ -374,15 +401,33 @@ function listDatabaseBackups(backupDir) {
     .sort((first, second) => new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime());
 }
 
-function pruneAutoBackups(backupDir) {
-  const backups = listDatabaseBackups(backupDir).filter((backup) => !backup.fileName.includes('manual'));
-  backups.slice(MAX_AUTO_BACKUPS).forEach((backup) => {
+function pruneBackups(backupDir) {
+  pruneBackupList(
+    listDatabaseBackups(backupDir).filter((backup) => !isManualBackup(backup.fileName) && !isCorruptBackup(backup.fileName)),
+    MAX_AUTO_BACKUPS,
+  );
+  pruneBackupList(
+    listDatabaseBackups(backupDir).filter((backup) => isManualBackup(backup.fileName)),
+    MAX_MANUAL_BACKUPS,
+  );
+}
+
+function pruneBackupList(backups, maxCount) {
+  backups.slice(maxCount).forEach((backup) => {
     try {
       fs.unlinkSync(backup.path);
     } catch {
       // Old backup cleanup is best effort only.
     }
   });
+}
+
+function isManualBackup(fileName) {
+  return String(fileName || '').toLowerCase().includes('-manual-');
+}
+
+function isCorruptBackup(fileName) {
+  return String(fileName || '').toLowerCase().includes('-corrupt-');
 }
 
 function resolveBackupPath(backupDir, fileName) {

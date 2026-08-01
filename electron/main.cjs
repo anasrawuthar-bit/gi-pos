@@ -276,7 +276,7 @@ ipcMain.handle('receipt:print-test', async (_event, settings) => {
       billNo: 'TEST',
       orderType: 'Printer Test',
       table: 'T1',
-      cashier: 'Admin',
+      cashier: 'Owner',
       paymentMethod: 'Cash',
       items: [
         { name: 'Chicken Biriyani', qty: 1, price: 150, total: 150 },
@@ -358,7 +358,7 @@ ipcMain.handle('kot:print-test', async (_event, payload) => {
       station,
       orderType: 'Dining',
       table: 'T1',
-      cashier: 'Admin',
+      cashier: 'Owner',
       items: [
         { name: 'Chicken Biriyani', qty: 1, description: 'Less spicy' },
         { name: 'Fresh Lime', qty: 2, description: 'No ice' },

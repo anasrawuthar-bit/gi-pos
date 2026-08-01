@@ -221,6 +221,11 @@ type TableQrPreview = {
   dataUrl: string
 }
 
+type AccessPrompt = {
+  title: string
+  message: string
+}
+
 type CustomerProfile = {
   id: string
   name: string
@@ -808,6 +813,7 @@ function App() {
   const [tableGroupName, setTableGroupName] = useState('')
   const [tableGroupTables, setTableGroupTables] = useState('')
   const [customerEditorOpen, setCustomerEditorOpen] = useState(false)
+  const [customerDetailEditing, setCustomerDetailEditing] = useState(false)
   const [discountEditorOpen, setDiscountEditorOpen] = useState(false)
   const [orderListMode, setOrderListMode] = useState<OrderListMode | null>(null)
   const [orderListDate, setOrderListDate] = useState(() => formatDateInputValue(new Date()))
@@ -858,6 +864,7 @@ function App() {
   const [expenseStatus, setExpenseStatus] = useState('Ready')
   const [printers, setPrinters] = useState<PrinterInfo[]>([])
   const [printerStatus, setPrinterStatus] = useState('Ready')
+  const [accessPrompt, setAccessPrompt] = useState<AccessPrompt | null>(null)
   const [printerProfiles, setPrinterProfiles] = useState<PrinterProfile[]>(() => loadInitialPrinterProfiles())
   const [activePrinterProfileId, setActivePrinterProfileId] = useState(
     () => localStorage.getItem('active-printer-profile-id') || defaultBillPrinterProfileId,
@@ -888,6 +895,9 @@ function App() {
   const [forgotStatus, setForgotStatus] = useState('')
   const skipPersistenceRef = useRef(false)
   const syncInFlightRef = useRef(false)
+  const setupCloudLoginInputRef = useRef<HTMLInputElement | null>(null)
+  const loginPinInputRef = useRef<HTMLInputElement | null>(null)
+  const authFocusTimerRef = useRef<number[]>([])
   const businessProfileRef = useRef(businessProfile)
   const cloudSyncSettingsRef = useRef(cloudSyncSettings)
   const staffUsersRef = useRef(staffUsers)
@@ -944,6 +954,7 @@ function App() {
       setDatabaseBackupStatus(`Backup list failed: ${getErrorMessage(error)}`)
     }
   }, [])
+
   const [currentUserId, setCurrentUserId] = useState('')
   const [loginUserId, setLoginUserId] = useState('')
   const [loginPin, setLoginPin] = useState('')
@@ -961,6 +972,33 @@ function App() {
   const [setupRestaurantId, setSetupRestaurantId] = useState('')
   const [setupStatus, setSetupStatus] = useState('')
   const [setupWorking, setSetupWorking] = useState(false)
+
+  useEffect(() => {
+    authFocusTimerRef.current.forEach((timer) => window.clearTimeout(timer))
+    authFocusTimerRef.current = []
+
+    if (!storageReady || currentUserId) {
+      return undefined
+    }
+
+    const focusTarget = () => {
+      const target = staffUsers.length ? loginPinInputRef.current : setupCloudLoginInputRef.current
+      if (!target || target.disabled) {
+        return
+      }
+
+      target.focus({ preventScroll: true })
+    }
+
+    window.requestAnimationFrame(focusTarget)
+    authFocusTimerRef.current = [60, 250, 600].map((delay) => window.setTimeout(focusTarget, delay))
+
+    return () => {
+      authFocusTimerRef.current.forEach((timer) => window.clearTimeout(timer))
+      authFocusTimerRef.current = []
+    }
+  }, [currentUserId, staffUsers.length, storageReady])
+
   const [syncCloudLogin, setSyncCloudLogin] = useState('')
   const [syncCloudPassword, setSyncCloudPassword] = useState('')
   const [syncTransferCode, setSyncTransferCode] = useState('')
@@ -1161,6 +1199,21 @@ function App() {
     () => customers.find((profile) => profile.id === selectedCustomerId),
     [customers, selectedCustomerId],
   )
+  const selectedCustomerUnpaidOrders = useMemo(() => {
+    if (!selectedCustomerProfile || selectedCustomerProfile.creditBalance <= 0) {
+      return []
+    }
+
+    return savedOrders
+      .filter(
+        (order) =>
+          order.customerId === selectedCustomerProfile.id &&
+          order.status === 'paid' &&
+          order.creditApplied &&
+          order.totals.balance > 0,
+      )
+      .sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime())
+  }, [savedOrders, selectedCustomerProfile])
   const selectedTableSetupGroup = useMemo(
     () => (editingTableGroupId ? (diningTableGroups.find((group) => group.id === editingTableGroupId) ?? null) : null),
     [diningTableGroups, editingTableGroupId],
@@ -1793,6 +1846,7 @@ function App() {
   const billingOwnerName = businessProfile.ownerName.trim()
   const billingDisplayName = billingBusinessName || 'Billing business not set'
   const receiptBusinessName = billingBusinessName || 'Restaurant'
+  const receiptCashierName = currentUser?.name?.trim() || 'Owner'
   const hasCloudDeviceConnection = Boolean(
     cloudSyncSettings.restaurantId.trim() &&
       cloudSyncSettings.deviceId.trim() &&
@@ -1814,31 +1868,20 @@ function App() {
       return [
         { label: 'Mode', value: 'Offline' },
         { label: 'Plan', value: currentPlanDetails?.name || offlineLicense.subscriptionPlan || 'Offline' },
-        { label: 'Status', value: titleCase(offlineLicense.subscriptionStatus || 'active') },
-        { label: 'Activation Date', value: formatLicenseDate(offlineLicense.activatedAt) },
         { label: 'Expiry Date', value: formatLicenseDate(offlineLicense.expiresAt || offlineLicense.subscriptionExpiresAt) },
-        { label: 'License ID', value: offlineLicense.licenseId },
-        { label: 'License Key', value: offlineLicense.licenseKey },
         { label: 'Business', value: offlineLicense.businessName },
         { label: 'Phone', value: offlineLicense.phone },
-        { label: 'Device', value: offlineLicense.deviceName || 'This PC' },
-        { label: 'Device Fingerprint', value: offlineLicense.deviceFingerprint },
-        { label: 'Issued At', value: formatLicenseDate(offlineLicense.issuedAt) },
       ]
     }
 
     return [
       { label: 'Mode', value: 'Cloud' },
       { label: 'Plan', value: currentPlanDetails?.name || cloudSyncSettings.subscriptionPlan || 'Not paired' },
-      { label: 'Status', value: titleCase(cloudSyncSettings.subscriptionStatus || 'not paired') },
       { label: 'Expiry Date', value: formatLicenseDate(cloudSyncSettings.subscriptionExpiresAt) },
       { label: 'Business', value: cloudSyncSettings.restaurantName || businessProfile.businessName || 'Not set' },
       { label: 'Owner', value: cloudSyncSettings.restaurantOwnerName || businessProfile.ownerName || 'Not set' },
       { label: 'Phone', value: cloudSyncSettings.restaurantPhone || businessProfile.phone || 'Not set' },
       { label: 'Email', value: cloudSyncSettings.restaurantEmail || businessProfile.email || 'Not set' },
-      { label: 'Device', value: cloudSyncSettings.deviceName || 'Main App' },
-      { label: 'Restaurant ID', value: cloudSyncSettings.restaurantId || 'Not paired' },
-      { label: 'Device ID', value: cloudSyncSettings.deviceId || 'Not paired' },
       { label: 'Server', value: cloudSyncSettings.apiUrl || defaultCloudSyncSettings.apiUrl },
       { label: 'Last Sync', value: formatLicenseDate(cloudSyncSettings.lastSyncAt) },
     ]
@@ -1848,7 +1891,6 @@ function App() {
   }, [currentLicenseRows])
   const licenseModeLabel = licenseValueByLabel.get('Mode') || 'Not set'
   const licensePlanLabel = licenseValueByLabel.get('Plan') || 'Not set'
-  const licenseStatusLabel = licenseValueByLabel.get('Status') || 'Not set'
   const licenseExpiryLabel = licenseValueByLabel.get('Expiry Date') || 'Not set'
   const licenseGroups = useMemo(() => {
     const pickRows = (labels: string[]) =>
@@ -1859,21 +1901,42 @@ function App() {
     return [
       {
         title: 'License',
-        rows: pickRows(['Mode', 'Plan', 'Status', 'Activation Date', 'Expiry Date', 'License ID', 'License Key']),
+        rows: pickRows(['Mode', 'Plan', 'Expiry Date']),
       },
       {
         title: 'Business',
         rows: pickRows(['Business', 'Owner', 'Phone', 'Email']),
       },
       {
-        title: 'Device & Server',
-        rows: pickRows(['Device', 'Device ID', 'Device Fingerprint', 'Restaurant ID', 'Server', 'Last Sync', 'Issued At']),
+        title: 'Connection',
+        rows: pickRows(['Server', 'Last Sync']),
       },
     ].filter((group) => group.rows.length)
   }, [licenseValueByLabel])
 
   function hasPermission(permission: StaffPermission) {
     return currentPermissionSet.has(permission)
+  }
+
+  function showAccessPrompt(message: string, title = 'Access restricted') {
+    setPrinterStatus(message)
+    setAccessPrompt({ title, message })
+  }
+
+  function getPermissionDeniedMessage(permission: StaffPermission) {
+    const label = staffPermissions.find((staffPermission) => staffPermission.id === permission)?.label ?? 'this action'
+    return `You don't have access to ${label}. Only an admin can do it.`
+  }
+
+  function getViewPermission(view: AppView): StaffPermission | null {
+    if (view === 'pos') return 'pos_access'
+    if (view === 'reports') return 'reports'
+    if (view === 'expenses') return 'expense_manage'
+    if (view === 'profile') return 'business_profile'
+    if (view === 'sync') return 'cloud_sync'
+    if (view === 'users') return 'user_manage'
+    if (view === 'network') return 'cloud_sync'
+    return null
   }
 
   function canOpenView(view: AppView) {
@@ -1903,27 +1966,28 @@ function App() {
 
   function goToView(view: AppView) {
     if (!canOpenView(view)) {
-      setPrinterStatus(
+      const viewPermission = getViewPermission(view)
+      const message =
         hasOfflineAccess && (view === 'sync' || view === 'network')
           ? 'Offline plan does not include cloud sync or local POS server.'
-          : view === 'network'
+          : view === 'network' && !hasGoldLocalPlan
             ? 'Local POS Server is included in Gold plan.'
-            : subscriptionLock?.message ?? 'Permission required',
-      )
+            : subscriptionLock?.message ?? (viewPermission ? getPermissionDeniedMessage(viewPermission) : 'You do not have access to this section.')
+      showAccessPrompt(message)
       return
     }
 
     setActiveView(view)
   }
 
-  function requirePermission(permission: StaffPermission, message = 'Permission required') {
+  function requirePermission(permission: StaffPermission, message?: string) {
     if (hasOfflineAccess && permission === 'cloud_sync') {
-      setPrinterStatus('Offline plan does not include cloud sync.')
+      showAccessPrompt('Offline plan does not include cloud sync.')
       return false
     }
 
     if (!hasSubscriptionAccess && permission !== 'cloud_sync') {
-      setPrinterStatus(subscriptionLock?.message ?? 'Subscription check required')
+      showAccessPrompt(subscriptionLock?.message ?? 'Subscription check required')
       return false
     }
 
@@ -1931,7 +1995,8 @@ function App() {
       return true
     }
 
-    setPrinterStatus(message)
+    const deniedMessage = message && !/permission required/i.test(message) ? message : getPermissionDeniedMessage(permission)
+    showAccessPrompt(deniedMessage)
     return false
   }
 
@@ -2373,6 +2438,7 @@ function App() {
 
     setCurrentUserId('')
     setLoginPin('')
+    closeBlockingPanelsForAuth()
     setActiveView('home')
   }
 
@@ -2645,6 +2711,7 @@ function App() {
     ]
 
     skipPersistenceRef.current = true
+    closeBlockingPanelsForAuth()
 
     try {
       await window.posDb?.resetAll()
@@ -2678,10 +2745,6 @@ function App() {
       setLoginAttempts(0)
       setLoginLockedUntil(0)
       setSubscriptionLock(null)
-      setAccountPanelOpen(false)
-      setQrOrdersOpen(false)
-      setTableQrPreview(null)
-      setSuccessOrder(null)
       setPendingSyncCount(0)
       setActiveView('home')
       startBlankOrder(false)
@@ -2770,6 +2833,28 @@ function App() {
     } else {
       setPrinterStatus('No cloud signup details available to update Business Profile')
     }
+  }
+
+  function closeBlockingPanelsForAuth() {
+    setPrinterOpen(false)
+    setKotPrintOpen(false)
+    setMenuEditorOpen(false)
+    setDisplaySettingsOpen(false)
+    setTableSelectorOpen(false)
+    setTableSetupOpen(false)
+    setQrOrdersOpen(false)
+    setTableQrPreview(null)
+    setCustomerEditorOpen(false)
+    setDiscountEditorOpen(false)
+    setOrderListMode(null)
+    setSelectedOrderIds([])
+    setReportOpen(false)
+    setLineActionId(null)
+    setLineEditor(null)
+    setPendingPriceItem(null)
+    setSuccessOrder(null)
+    setAccountPanelOpen(false)
+    setForgotPinOpen(false)
   }
 
   async function completeActivationLogout() {
@@ -4200,6 +4285,7 @@ function App() {
     setCustomer(profile.name)
     setCustomerPhone(profile.phone)
     setCustomerAddress(profile.address)
+    setCustomerDetailEditing(false)
     setPrinterStatus(`${profile.name} customer profile saved`)
 
     return profile
@@ -4208,17 +4294,25 @@ function App() {
   function selectCustomerProfile(profile: CustomerProfile) {
     setSelectedCustomerId(profile.id)
     setCustomer(profile.name)
-    setCustomerSearch(profile.name)
     setCustomerPhone(profile.phone)
     setCustomerAddress(profile.address)
+    setCustomerDetailEditing(false)
+  }
+
+  function editCustomerProfile(profile: CustomerProfile) {
+    setSelectedCustomerId(profile.id)
+    setCustomer(profile.name)
+    setCustomerPhone(profile.phone)
+    setCustomerAddress(profile.address)
+    setCustomerDetailEditing(true)
   }
 
   function clearCustomerProfile() {
     setSelectedCustomerId('')
     setCustomer('')
-    setCustomerSearch('')
     setCustomerPhone('')
     setCustomerAddress('')
+    setCustomerDetailEditing(true)
   }
 
   function markSelectedCustomerDuePaid() {
@@ -4783,7 +4877,7 @@ function App() {
       orderType,
       table: getSeatingDisplayLabel(seatingMode, table, selectedTables, diningGroupName),
       customer,
-      cashier: 'Admin',
+      cashier: receiptCashierName,
       paymentMethod,
       paymentBreakdown,
       items: cart.map((line) => ({
@@ -4819,7 +4913,7 @@ function App() {
       orderType,
       table: getSeatingDisplayLabel(seatingMode, table, selectedTables, diningGroupName),
       customer,
-      cashier: 'Admin',
+      cashier: receiptCashierName,
       items: cart.map((line) => ({
         name: line.name,
         qty: line.qty,
@@ -5075,6 +5169,7 @@ function App() {
                 <label>
                   Phone or Email
                   <input
+                    ref={setupCloudLoginInputRef}
                     autoComplete="username"
                     value={setupCloudLogin}
                     onChange={(event) => setSetupCloudLogin(event.target.value)}
@@ -5246,6 +5341,7 @@ function App() {
             <label>
               PIN
               <input
+                ref={loginPinInputRef}
                 autoFocus
                 className="pin-input"
                 type="password"
@@ -6836,18 +6932,16 @@ function App() {
                   <img src={appIconUrl} alt="" />
                 </div>
                 <div>
-                  <span>{hasOfflineAccess ? 'Offline POS license' : 'Cloud connected POS'}</span>
+                  <span>{hasOfflineAccess ? 'Offline POS' : 'Cloud POS'}</span>
                   <h2>{appName}</h2>
                   <p>
-                    {companyName} - {companyWebsiteDisplay}
+                    Restaurant billing, reporting, customer credit, and printer workflow by {companyName}.
                   </p>
                 </div>
               </div>
               <div className="about-hero-badges">
                 <span>{licensePlanLabel}</span>
-                <span className={licenseStatusLabel.toLowerCase().includes('active') ? 'good' : 'warn'}>
-                  {licenseStatusLabel}
-                </span>
+                <span>Valid till {licenseExpiryLabel}</span>
                 <span>v{appVersion}</span>
               </div>
             </section>
@@ -6859,28 +6953,26 @@ function App() {
                 <small>{licenseModeLabel}</small>
               </article>
               <article>
-                <span>Expiry</span>
+                <span>Valid Till</span>
                 <strong>{licenseExpiryLabel}</strong>
-                <small>Current subscription validity</small>
+                <small>License period</small>
               </article>
               <article>
-                <span>Storage</span>
-                <strong>{localDatabasePath ? 'SQLite Ready' : 'Browser Storage'}</strong>
-                <small title={localDatabaseDataDir || localDatabasePath || 'Local storage'}>
-                  {localDatabaseDataDir || localDatabasePath || 'Local storage'}
-                </small>
+                <span>Business</span>
+                <strong>{licenseValueByLabel.get('Business') || billingDisplayName}</strong>
+                <small>{licenseValueByLabel.get('Phone') || businessProfile.phone || 'Phone not set'}</small>
               </article>
               <article>
-                <span>Update</span>
-                <strong>{updateStatus.state === 'idle' ? 'Ready' : titleCase(updateStatus.state)}</strong>
-                <small>{updateStatus.message}</small>
+                <span>Version</span>
+                <strong>v{appVersion}</strong>
+                <small>{companyWebsiteDisplay}</small>
               </article>
             </section>
 
             <section className="home-card license-details-panel refined-license-panel">
               <div>
-                <strong>License Details</strong>
-                <span>Activation, business, device, and sync information</span>
+                <strong>Account Details</strong>
+                <span>Clean business and license summary</span>
               </div>
               <div className="license-group-grid">
                 {licenseGroups.map((group) => (
@@ -6897,11 +6989,34 @@ function App() {
               </div>
             </section>
 
-            <section className="home-card app-update-panel about-update-card">
+            <section className="home-card about-service-card">
+              <div className="section-title">
                 <div>
-                  <strong>App Update</strong>
-                  <span>{updateStatus.message}</span>
+                  <strong>Support & Data</strong>
+                  <span>Update, backup, and restore</span>
                 </div>
+                <Save size={20} />
+              </div>
+
+              <div className="about-service-grid">
+                <div>
+                  <span>Data Folder</span>
+                  <strong title={localDatabaseDataDir || 'C:\\GIPOS Restaurant'}>
+                    {localDatabaseDataDir || 'C:\\GIPOS Restaurant'}
+                  </strong>
+                </div>
+                <div>
+                  <span>Database</span>
+                  <strong title={localDatabasePath || 'Local storage'}>{localDatabasePath ? 'SQLite protected' : 'Local storage'}</strong>
+                </div>
+                <div>
+                  <span>Backup</span>
+                  <strong title={localDatabaseBackupDir || 'Backup folder'}>
+                    {localDatabaseBackupDir ? 'Backup ready' : 'Manual backup'}
+                  </strong>
+                </div>
+              </div>
+
                 {typeof updateStatus.percent === 'number' && updateStatus.state === 'downloading' && (
                   <div className="update-progress">
                     <span style={{ width: `${Math.min(100, Math.max(0, updateStatus.percent))}%` }} />
@@ -6924,34 +7039,6 @@ function App() {
                     </button>
                   )}
                 </div>
-                <small>{updateStatus.updateUrl || 'Update server not set'}</small>
-            </section>
-
-            <section className="home-card database-safety-panel about-data-card">
-                <div>
-                  <strong>Local Data Safety</strong>
-                  <span>Database is stored outside the installer folder so uninstall will not remove bills, users, or menu data.</span>
-                </div>
-                <div className="database-path-list">
-                  <div>
-                    <span>Data Folder</span>
-                    <strong title={localDatabaseDataDir || 'C:\\GIPOS Restaurant'}>
-                      {localDatabaseDataDir || 'C:\\GIPOS Restaurant'}
-                    </strong>
-                  </div>
-                  {localDatabasePath && (
-                    <div>
-                      <span>Database</span>
-                      <strong title={localDatabasePath}>{localDatabasePath}</strong>
-                    </div>
-                  )}
-                  {localDatabaseBackupDir && (
-                    <div>
-                      <span>Backup Folder</span>
-                      <strong title={localDatabaseBackupDir}>{localDatabaseBackupDir}</strong>
-                    </div>
-                  )}
-                </div>
                 <div className="database-backup-row">
                   <select
                     value={selectedDatabaseBackup}
@@ -6961,7 +7048,7 @@ function App() {
                     {databaseBackups.length ? (
                       databaseBackups.map((backup) => (
                         <option key={backup.fileName} value={backup.fileName}>
-                          {backup.fileName} - {formatFileSize(backup.size)}
+                          {formatDatabaseBackupLabel(backup)}
                         </option>
                       ))
                     ) : (
@@ -6988,7 +7075,7 @@ function App() {
                     Restore Selected
                   </button>
                 </div>
-                <small>{databaseBackupStatus}</small>
+                <small>{databaseBackupStatus}. Automatic safety backups are limited; manual backups are kept separately.</small>
             </section>
 
             <section className="home-card company-info-card about-company-card">
@@ -6999,29 +7086,25 @@ function App() {
                 </a>
               </div>
               <p>
-                {companyName} builds reliable digital solutions for businesses that need dependable online and
-                in-store operations. Our services focus on hosting, domains, business websites, and practical software
-                tools that help companies work faster, serve customers better, and manage daily operations with
-                confidence.
+                {companyName} provides business hosting, domains, websites, and practical software tools for local
+                companies that need dependable daily operations.
               </p>
               <p>
-                {appName} is developed as a desktop restaurant POS solution for billing, menu management, customer
-                credit, reports, and thermal printer workflows. The product is designed for speed, simplicity, and
-                long-term business use.
+                {appName} is built for fast restaurant counters: billing, table orders, customer credit, reports,
+                expenses, and thermal printing in one focused desktop system.
               </p>
             </section>
 
             <section className="home-card company-info-card terms-card">
               <div className="section-title">
                 <strong>Terms & Conditions</strong>
-                
+                <span>Business use policy</span>
               </div>
               <ul>
-                <li>The software is provided for restaurant billing, sales recording, reporting, and related POS operations.</li>
-                <li>Business, tax, menu, customer, printer, and billing information must be verified by the user before use.</li>
-                <li>Users are responsible for maintaining backups of sales data, customer credit records, and business settings.</li>
-                <li>Printer, network, device, and operating system issues may affect billing or printing and should be tested before live use.</li>
-                <li>{companyName} may provide updates, improvements, and support, but business decisions and statutory compliance remain the responsibility of the business owner.</li>
+                <li>Use this software only for restaurant billing, reports, customer credit, expenses, and POS operations.</li>
+                <li>Verify business details, tax settings, printer setup, menu prices, and bill format before live billing.</li>
+                <li>Keep regular backups of bills, customers, menu, expenses, and business settings.</li>
+                <li>Business decisions, tax filing, and statutory compliance remain the responsibility of the business owner.</li>
               </ul>
             </section>
           </div>
@@ -8065,27 +8148,36 @@ function App() {
                 <div className="customer-picker-list">
                   {filteredCustomers.length ? (
                     filteredCustomers.map((profile) => (
-                      <button
+                      <div
                         className={[
+                          'customer-picker-row',
                           selectedCustomerId === profile.id ? 'active' : '',
                           profile.creditBalance > 0 ? 'has-due' : '',
                         ]
                           .filter(Boolean)
                           .join(' ')}
                         key={profile.id}
-                        type="button"
-                        onClick={() => selectCustomerProfile(profile)}
                       >
-                        <div className="customer-row-head">
-                          <strong className="customer-name-with-badge">
-                            {profile.name}
-                            {profile.creditBalance > 0 && <small className="due-badge">DUE</small>}
-                          </strong>
-                          {profile.creditBalance > 0 && <span>{money(profile.creditBalance)}</span>}
-                        </div>
-                        <span>{profile.phone || 'No phone'}</span>
-                        {profile.address && <small>{profile.address}</small>}
-                      </button>
+                        <button className="customer-select-button" type="button" onClick={() => selectCustomerProfile(profile)}>
+                          <div className="customer-row-head">
+                            <strong className="customer-name-with-badge">
+                              {profile.name}
+                              {profile.creditBalance > 0 && <small className="due-badge">DUE</small>}
+                            </strong>
+                            <span>{profile.creditBalance > 0 ? money(profile.creditBalance) : 'No Due'}</span>
+                          </div>
+                          <span>{profile.phone || 'No phone'}</span>
+                        </button>
+                        <button
+                          className="customer-edit-button"
+                          type="button"
+                          onClick={() => editCustomerProfile(profile)}
+                          aria-label={`Edit ${profile.name}`}
+                          title={`Edit ${profile.name}`}
+                        >
+                          <Pencil size={16} />
+                        </button>
+                      </div>
                     ))
                   ) : (
                     <div className="empty-customer-list">
@@ -8096,61 +8188,105 @@ function App() {
               </section>
 
               <section className="customer-detail-panel">
-                <div className="customer-summary-card">
-                  <div>
-                    <span>Selected Customer</span>
-                    <strong>{customer || 'Walk-in'}</strong>
-                  </div>
-                  <div>
-                    <span>Credit Balance</span>
-                    <strong className="customer-name-with-badge">
-                      {money(selectedCustomerProfile?.creditBalance ?? 0)}
-                      {(selectedCustomerProfile?.creditBalance ?? 0) > 0 && <small className="due-badge">DUE</small>}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>Phone</span>
-                    <strong>{selectedCustomerProfile?.phone || customerPhone || 'Not set'}</strong>
-                  </div>
-                  <div>
-                    <span>Total Credit</span>
-                    <strong>{money(selectedCustomerProfile?.totalCredit ?? 0)}</strong>
-                  </div>
-                </div>
+                {selectedCustomerProfile && !customerDetailEditing ? (
+                  <>
+                    <div className="customer-readonly-head">
+                      <div>
+                        <span>Selected Customer</span>
+                        <strong>{selectedCustomerProfile.name}</strong>
+                      </div>
+                      <button
+                        className="small-button icon-only"
+                        type="button"
+                        onClick={() => editCustomerProfile(selectedCustomerProfile)}
+                        aria-label={`Edit ${selectedCustomerProfile.name}`}
+                        title={`Edit ${selectedCustomerProfile.name}`}
+                      >
+                        <Pencil size={16} />
+                      </button>
+                    </div>
 
-                <div className="dialog-grid">
-                  <label className="dialog-field">
-                    Customer Name
-                    <input
-                      placeholder="Customer name"
-                      value={customer}
-                      onChange={(event) => setCustomer(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' && saveCustomerProfile()) {
-                          setCustomerEditorOpen(false)
-                        }
-                      }}
-                    />
-                  </label>
+                    <div className="customer-summary-card">
+                      <div>
+                        <span>Mobile Number</span>
+                        <strong>{selectedCustomerProfile.phone || 'Not set'}</strong>
+                      </div>
+                      <div>
+                        <span>Balance Due</span>
+                        <strong className="customer-name-with-badge">
+                          {money(selectedCustomerProfile.creditBalance)}
+                          {selectedCustomerProfile.creditBalance > 0 && <small className="due-badge">DUE</small>}
+                        </strong>
+                      </div>
+                    </div>
 
-                  <label className="dialog-field">
-                    Phone
-                    <input
-                      placeholder="Mobile number"
-                      value={customerPhone}
-                      onChange={(event) => setCustomerPhone(event.target.value)}
-                    />
-                  </label>
-                </div>
+                    <div className="customer-due-section">
+                      <div className="customer-list-head">
+                        <strong>Unpaid Bills</strong>
+                        <span>{selectedCustomerUnpaidOrders.length} bill(s)</span>
+                      </div>
+                      <div className="customer-due-list">
+                        {selectedCustomerUnpaidOrders.length ? (
+                          selectedCustomerUnpaidOrders.map((order) => (
+                            <div className="customer-due-row" key={order.id}>
+                              <div>
+                                <span>Bill #{order.billNo}</span>
+                                <strong>{order.orderType} {order.table ? `/ ${order.table}` : ''}</strong>
+                              </div>
+                              <span>{formatDate(new Date(order.createdAt))}</span>
+                              <strong>{money(order.totals.balance)}</strong>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="empty-customer-list">No unpaid bills for this customer</div>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="customer-readonly-head">
+                      <div>
+                        <span>{selectedCustomerProfile ? 'Edit Customer' : 'New Customer'}</span>
+                        <strong>{selectedCustomerProfile?.name || 'Enter customer details'}</strong>
+                      </div>
+                    </div>
 
-                <label className="dialog-field">
-                  Address
-                  <textarea
-                    placeholder="Billing address"
-                    value={customerAddress}
-                    onChange={(event) => setCustomerAddress(event.target.value)}
-                  />
-                </label>
+                    <div className="dialog-grid">
+                      <label className="dialog-field">
+                        Customer Name
+                        <input
+                          placeholder="Customer name"
+                          value={customer}
+                          onChange={(event) => setCustomer(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' && saveCustomerProfile()) {
+                              setCustomerDetailEditing(false)
+                            }
+                          }}
+                        />
+                      </label>
+
+                      <label className="dialog-field">
+                        Phone
+                        <input
+                          placeholder="Mobile number"
+                          value={customerPhone}
+                          onChange={(event) => setCustomerPhone(event.target.value)}
+                        />
+                      </label>
+                    </div>
+
+                    <label className="dialog-field">
+                      Address
+                      <textarea
+                        placeholder="Billing address"
+                        value={customerAddress}
+                        onChange={(event) => setCustomerAddress(event.target.value)}
+                      />
+                    </label>
+                  </>
+                )}
 
                 <div className="panel-actions customer-actions">
                   <button className="small-button" type="button" onClick={clearCustomerProfile}>
@@ -8168,10 +8304,11 @@ function App() {
                   </button>
                   <button
                     className="small-button"
+                    disabled={Boolean(selectedCustomerProfile && !customerDetailEditing)}
                     type="button"
                     onClick={() => {
                       if (saveCustomerProfile()) {
-                        setCustomerEditorOpen(false)
+                        setCustomerDetailEditing(false)
                       }
                     }}
                   >
@@ -8418,15 +8555,17 @@ function App() {
                 <span>{selectedVisibleOrders.length} selected</span>
                 <strong>{money(selectedOrdersTotal)}</strong>
               </div>
-              <button
-                className="small-button danger"
-                type="button"
-                disabled={!selectedVisibleOrders.length}
-                onClick={deleteSelectedOrders}
-              >
-                <Trash2 size={16} />
-                Delete Selected
-              </button>
+              {selectedVisibleOrders.length > 0 && (
+                <button
+                  className="small-button danger icon-only"
+                  type="button"
+                  onClick={deleteSelectedOrders}
+                  aria-label={`Delete ${selectedVisibleOrders.length} selected order${selectedVisibleOrders.length === 1 ? '' : 's'}`}
+                  title={`Delete ${selectedVisibleOrders.length} selected order${selectedVisibleOrders.length === 1 ? '' : 's'}`}
+                >
+                  <Trash2 size={17} />
+                </button>
+              )}
             </div>
 
             <div className="orders-list">
@@ -8927,8 +9066,13 @@ function App() {
                 <strong>Printer Manager</strong>
                 <span>Create printer profiles for bill, kitchen, juice, counter, or any section</span>
               </div>
-              <button type="button" onClick={() => setPrinterOpen(false)} title="Close">
-                <MoreVertical size={18} />
+              <button
+                type="button"
+                onClick={() => setPrinterOpen(false)}
+                aria-label="Close printer manager"
+                title="Close printer manager"
+              >
+                <X size={18} />
               </button>
             </div>
 
@@ -9111,6 +9255,36 @@ function App() {
                   </button>
                 </div>
               </section>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {accessPrompt && (
+        <div className="modal-layer access-prompt-layer" role="alertdialog" aria-modal="true" aria-label={accessPrompt.title}>
+          <div className="quick-panel access-prompt-panel">
+            <div className="panel-head">
+              <div>
+                <strong>{accessPrompt.title}</strong>
+                <span>Admin permission required</span>
+              </div>
+              <button type="button" onClick={() => setAccessPrompt(null)} title="Close">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="access-prompt-body">
+              <div className="access-prompt-icon">
+                <User size={22} />
+              </div>
+              <div>
+                <strong>No access for this user</strong>
+                <p>{accessPrompt.message}</p>
+              </div>
+            </div>
+            <div className="panel-actions">
+              <button className="small-button primary" type="button" onClick={() => setAccessPrompt(null)}>
+                OK
+              </button>
             </div>
           </div>
         </div>
@@ -9403,8 +9577,62 @@ function safeReportFileName(value: string) {
   return cleaned || 'GI-POS-Report'
 }
 
+function getReportSummaryRows(report: ReturnType<typeof buildReport>, openingCash: number) {
+  const cashInHandWithOpening = roundMoney(openingCash + report.cashInHand)
+  const rows: Array<{ label: string; value: number; always?: boolean; count?: boolean }> = [
+    { label: 'Total Sales', value: report.salesTotal, always: true },
+    { label: 'Amount Received', value: report.receivedTotal, always: true },
+    { label: 'Paid Bills', value: report.paidCount, always: true, count: true },
+    { label: 'Opening Cash', value: openingCash },
+    { label: 'Cash Received', value: report.cashReceivedTotal },
+    { label: 'Cash In Hand', value: cashInHandWithOpening, always: true },
+    { label: 'UPI', value: report.upiTotal },
+    { label: 'Card', value: report.cardTotal },
+    { label: 'Bank', value: report.bankTotal, always: true },
+    { label: 'Due / Credit', value: report.balanceTotal },
+    { label: 'Discount', value: report.discountTotal },
+    { label: 'Expense', value: report.expenseTotal },
+    { label: 'Net Amount', value: report.netTotal, always: true },
+    { label: 'Open Amount', value: report.openTotal },
+    { label: 'Open Bills', value: report.openCount, count: true },
+  ]
+
+  return rows
+    .filter((row) => row.always || reportNumberHasValue(row.value))
+    .map((row) => [row.label, row.count ? String(row.value) : money(row.value)])
+}
+
+function appendCsvSection(rows: string[][], title: string, headers: string[], dataRows: string[][]) {
+  if (!dataRows.length) {
+    return
+  }
+
+  rows.push([], [title], headers, ...dataRows)
+}
+
+function reportNumberHasValue(value: number) {
+  return Math.abs(Number(value) || 0) >= 0.005
+}
+
 function buildReportCsv(data: ReportExportData) {
   const report = data.reportData
+  const paymentRows = paymentMethods
+    .map((method) => [method, money(report.paymentTotals[method] ?? 0), report.paymentTotals[method] ?? 0] as const)
+    .filter((row) => reportNumberHasValue(row[2]))
+    .map(([method, amount]) => [method, amount])
+  const orderTypeRows = orderTypes
+    .map(
+      (type) =>
+        [
+          type,
+          String(report.orderTypeTotals[type].count),
+          money(report.orderTypeTotals[type].total),
+          report.orderTypeTotals[type].count,
+          report.orderTypeTotals[type].total,
+        ] as const,
+    )
+    .filter((row) => row[3] > 0 || reportNumberHasValue(row[4]))
+    .map(([type, count, total]) => [type, count, total])
   const rows: string[][] = [
     ['GI POS Restaurant Report'],
     ['Business', data.businessName],
@@ -9414,38 +9642,22 @@ function buildReportCsv(data: ReportExportData) {
     ['Generated At', formatDateTime(new Date(data.generatedAt))],
     [],
     ['Summary', 'Value'],
-    ['Total Sales', money(report.salesTotal)],
-    ['Amount Received', money(report.receivedTotal)],
-    ['Paid Bills', String(report.paidCount)],
-    ['Opening Cash', money(data.openingCash)],
-    ['Cash Received', money(report.cashReceivedTotal)],
-    ['Cash In Hand', money(data.openingCash + report.cashInHand)],
-    ['UPI', money(report.upiTotal)],
-    ['Card', money(report.cardTotal)],
-    ['Bank', money(report.bankTotal)],
-    ['Due / Credit', money(report.balanceTotal)],
-    ['Discount', money(report.discountTotal)],
-    ['Expense', money(report.expenseTotal)],
-    ['Net Amount', money(report.netTotal)],
-    ['Open Amount', money(report.openTotal)],
-    ['Open Bills', String(report.openCount)],
-    [],
-    ['Payment Summary', 'Amount'],
-    ...paymentMethods.map((method) => [method, money(report.paymentTotals[method] ?? 0)]),
-    [],
-    ['Order Type', 'Count', 'Total'],
-    ...orderTypes.map((type) => [
-      type,
-      String(report.orderTypeTotals[type].count),
-      money(report.orderTypeTotals[type].total),
-    ]),
-    [],
-    ['Top Items', 'Qty', 'Total'],
-    ...report.topItems.map((item) => [item.name, String(item.qty), money(item.total)]),
-    [],
-    ['Bill Details'],
+    ...getReportSummaryRows(report, data.openingCash),
+  ]
+
+  appendCsvSection(rows, 'Payment Summary', ['Method', 'Amount'], paymentRows)
+  appendCsvSection(rows, 'Order Type', ['Type', 'Count', 'Total'], orderTypeRows)
+  appendCsvSection(
+    rows,
+    'Top Items',
+    ['Item', 'Qty', 'Total'],
+    report.topItems.map((item) => [item.name, String(item.qty), money(item.total)]),
+  )
+  appendCsvSection(
+    rows,
+    'Bill Details',
     ['Bill No', 'Date', 'Type', 'Table', 'Customer', 'Payment', 'Status', 'Items', 'Subtotal', 'Discount', 'Tax', 'Total', 'Paid', 'Due', 'Cash', 'UPI', 'Card'],
-    ...data.orders.map((order) => [
+    data.orders.map((order) => [
       order.billNo,
       formatDateTime(new Date(order.createdAt)),
       order.orderType,
@@ -9464,10 +9676,12 @@ function buildReportCsv(data: ReportExportData) {
       money(order.paymentBreakdown?.upi ?? getOrderUpiReceived(order)),
       money(order.paymentBreakdown?.card ?? getOrderCardReceived(order)),
     ]),
-    [],
-    ['Expense Details'],
+  )
+  appendCsvSection(
+    rows,
+    'Expense Details',
     ['Date', 'Category', 'Payment', 'Amount', 'Vendor', 'Note'],
-    ...data.expenses.map((expense) => [
+    data.expenses.map((expense) => [
       expense.date,
       expense.category,
       expense.paymentMethod,
@@ -9475,7 +9689,7 @@ function buildReportCsv(data: ReportExportData) {
       expense.vendor,
       expense.note,
     ]),
-  ]
+  )
 
   return rows.map((row) => row.map(escapeCsvValue).join(',')).join('\r\n')
 }
@@ -9484,28 +9698,24 @@ function buildReportExportHtml(data: ReportExportData, format: 'excel' | 'pdf') 
   const report = data.reportData
   const cashInHandWithOpening = roundMoney(data.openingCash + report.cashInHand)
   const title = `${data.businessName} - ${data.period.label} Report`
-  const summaryRows = [
-    ['Total Sales', money(report.salesTotal)],
-    ['Amount Received', money(report.receivedTotal)],
-    ['Paid Bills', String(report.paidCount)],
-    ['Opening Cash', money(data.openingCash)],
-    ['Cash Received', money(report.cashReceivedTotal)],
-    ['Cash In Hand', money(cashInHandWithOpening)],
-    ['UPI', money(report.upiTotal)],
-    ['Card', money(report.cardTotal)],
-    ['Bank', money(report.bankTotal)],
-    ['Due / Credit', money(report.balanceTotal)],
-    ['Discount', money(report.discountTotal)],
-    ['Expense', money(report.expenseTotal)],
-    ['Net Amount', money(report.netTotal)],
-    ['Open Amount', money(report.openTotal)],
-    ['Open Bills', String(report.openCount)],
-  ]
-  const paymentRows = paymentMethods.map((method) => [method, money(report.paymentTotals[method] ?? 0)])
-  const orderTypeRows = orderTypes.map((type) => [
-    `${type} x ${report.orderTypeTotals[type].count}`,
-    money(report.orderTypeTotals[type].total),
-  ])
+  const summaryRows = getReportSummaryRows(report, data.openingCash)
+  const paymentRows = paymentMethods
+    .map((method) => [method, money(report.paymentTotals[method] ?? 0), report.paymentTotals[method] ?? 0] as const)
+    .filter((row) => reportNumberHasValue(row[2]))
+    .map(([method, amount]) => [method, amount])
+  const orderTypeRows = orderTypes
+    .map(
+      (type) =>
+        [
+          `${type} x ${report.orderTypeTotals[type].count}`,
+          money(report.orderTypeTotals[type].total),
+          report.orderTypeTotals[type].count,
+          report.orderTypeTotals[type].total,
+        ] as const,
+    )
+    .filter((row) => row[2] > 0 || reportNumberHasValue(row[3]))
+    .map(([label, total]) => [label, total])
+  const topItemRows = report.topItems.map((item) => [item.name, String(item.qty), money(item.total)])
   const extensionMeta =
     format === 'excel'
       ? '<meta http-equiv="Content-Type" content="application/vnd.ms-excel; charset=utf-8" />'
@@ -9518,26 +9728,26 @@ function buildReportExportHtml(data: ReportExportData, format: 'excel' | 'pdf') 
     ${extensionMeta}
     <title>${escapePrintHtml(title)}</title>
     <style>
-      @page { size: A4; margin: 10mm; }
+      @page { size: A4; margin: 7mm; }
       * { box-sizing: border-box; }
-      body { margin: 0; color: #111827; font-family: Arial, sans-serif; font-size: 12px; background: #fff; }
+      body { margin: 0; color: #111827; font-family: Arial, sans-serif; font-size: 11px; background: #fff; }
       .report-page { width: 100%; }
-      .header { display: flex; justify-content: space-between; gap: 18px; padding-bottom: 12px; border-bottom: 2px solid #111827; }
-      .brand h1 { margin: 0; font-size: 24px; letter-spacing: 0; }
-      .brand p, .meta p { margin: 4px 0 0; color: #475569; font-weight: 700; }
+      .header { display: flex; justify-content: space-between; gap: 14px; padding: 12px 14px; color: #fff; background: linear-gradient(135deg, #cc0d2d, #07848e); border-radius: 8px; }
+      .brand h1 { margin: 0; color: #fff; font-size: 22px; letter-spacing: 0; }
+      .brand p, .meta p { margin: 3px 0 0; color: rgba(255,255,255,.84); font-weight: 700; }
       .meta { text-align: right; }
-      .meta strong { display: block; font-size: 16px; }
-      .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 14px 0; }
-      .kpi { padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; }
-      .kpi span { display: block; color: #64748b; font-size: 10px; font-weight: 800; text-transform: uppercase; }
-      .kpi strong { display: block; margin-top: 5px; font-size: 18px; }
-      .section { margin-top: 14px; page-break-inside: avoid; }
-      h2 { margin: 0 0 8px; font-size: 15px; }
+      .meta strong { display: block; color: #fff; font-size: 15px; }
+      .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin: 10px 0; }
+      .kpi { padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; }
+      .kpi span { display: block; color: #64748b; font-size: 9px; font-weight: 800; text-transform: uppercase; }
+      .kpi strong { display: block; margin-top: 4px; font-size: 16px; }
+      .section { margin-top: 9px; page-break-inside: avoid; }
+      h2 { margin: 0 0 5px; font-size: 13px; }
       table { width: 100%; border-collapse: collapse; }
       th { color: #0f172a; background: #e2e8f0; font-size: 10px; text-transform: uppercase; }
-      th, td { padding: 7px 8px; border: 1px solid #cbd5e1; text-align: left; vertical-align: top; }
+      th, td { padding: 5px 6px; border: 1px solid #cbd5e1; text-align: left; vertical-align: top; }
       td.number, th.number { text-align: right; white-space: nowrap; }
-      .split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .split { display: grid; grid-template-columns: 1.1fr .9fr; gap: 8px; align-items: start; }
       .empty { padding: 10px; color: #64748b; border: 1px solid #cbd5e1; border-radius: 6px; }
       @media print {
         body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
@@ -9572,10 +9782,14 @@ function buildReportExportHtml(data: ReportExportData, format: 'excel' | 'pdf') 
         ${renderExportTable('Payment Summary', ['Method', 'Amount'], paymentRows)}
       </section>
 
-      <section class="split">
-        ${renderExportTable('Order Type', ['Type', 'Total'], orderTypeRows)}
-        ${renderExportTable('Top Items', ['Item', 'Qty', 'Total'], report.topItems.map((item) => [item.name, String(item.qty), money(item.total)]))}
-      </section>
+      ${
+        orderTypeRows.length || topItemRows.length
+          ? `<section class="split">
+              ${renderExportTable('Order Type', ['Type', 'Total'], orderTypeRows, [1], { hideWhenEmpty: true })}
+              ${renderExportTable('Top Items', ['Item', 'Qty', 'Total'], topItemRows, [1, 2], { hideWhenEmpty: true })}
+            </section>`
+          : ''
+      }
 
       ${renderExportTable(
         'Bill Details',
@@ -9597,6 +9811,7 @@ function buildReportExportHtml(data: ReportExportData, format: 'excel' | 'pdf') 
           money(order.totals.balance),
         ]),
         [8, 9, 10, 11, 12, 13],
+        { hideWhenEmpty: true },
       )}
 
       ${renderExportTable(
@@ -9611,13 +9826,24 @@ function buildReportExportHtml(data: ReportExportData, format: 'excel' | 'pdf') 
           expense.note,
         ]),
         [3],
+        { hideWhenEmpty: true },
       )}
     </main>
   </body>
 </html>`
 }
 
-function renderExportTable(title: string, headers: string[], rows: string[][], numberColumns: number[] = [1]) {
+function renderExportTable(
+  title: string,
+  headers: string[],
+  rows: string[][],
+  numberColumns: number[] = [1],
+  options: { hideWhenEmpty?: boolean } = {},
+) {
+  if (!rows.length && options.hideWhenEmpty) {
+    return ''
+  }
+
   const headerHtml = headers
     .map((header, index) => `<th class="${numberColumns.includes(index) ? 'number' : ''}">${escapePrintHtml(header)}</th>`)
     .join('')
@@ -9648,7 +9874,11 @@ function escapeCsvValue(value: string) {
 function buildReportPrintHtml(payload: ReportPrintPayload) {
   const report = payload.report
   const orderTypeRows = report.orderTypeRows
+    .filter((row) => Number(row.count ?? 0) > 0 || reportNumberHasValue(row.total ?? 0))
     .map((row) => `<tr><td>${escapePrintHtml(row.label)} x ${row.count ?? 0}</td><td>${money(row.total ?? 0)}</td></tr>`)
+    .join('')
+  const reportRows = getThermalReportRows(report)
+    .map((row) => `<tr class="${row.strong ? 'grand' : ''}"><td>${escapePrintHtml(row.label)}</td><td>${escapePrintHtml(row.value)}</td></tr>`)
     .join('')
 
   return `<!doctype html>
@@ -9659,17 +9889,17 @@ function buildReportPrintHtml(payload: ReportPrintPayload) {
     <style>
       @page { margin: 0; size: ${payload.settings.paperWidth === '58' ? 58 : 80}mm auto; }
       * { box-sizing: border-box; }
-      body { margin: 0; padding: 10px; color: #111; font-family: Arial, sans-serif; font-size: 12px; }
+      body { margin: 0; padding: 8px; color: #111; font-family: Arial, sans-serif; font-size: 11px; }
       .center { text-align: center; }
-      .shop { font-size: 18px; font-weight: 800; }
-      .title { margin-top: 5px; font-size: 15px; font-weight: 800; }
+      .shop { font-size: 16px; font-weight: 800; }
+      .title { margin-top: 4px; font-size: 13px; font-weight: 800; }
       .muted { color: #333; }
-      .rule { border-top: 1px dashed #111; margin: 8px 0; }
+      .rule { border-top: 1px dashed #111; margin: 6px 0; }
       table { width: 100%; border-collapse: collapse; }
-      td { padding: 3px 0; vertical-align: top; }
+      td { padding: 2px 0; vertical-align: top; }
       td:last-child { text-align: right; white-space: nowrap; padding-left: 8px; }
-      .grand td { font-size: 17px; font-weight: 800; border-top: 1px solid #111; padding-top: 6px; }
-      .section { margin-top: 8px; font-weight: 800; }
+      .grand td { font-size: 15px; font-weight: 800; border-top: 1px solid #111; padding-top: 5px; }
+      .section { margin-top: 6px; font-weight: 800; }
     </style>
   </head>
   <body>
@@ -9682,29 +9912,37 @@ function buildReportPrintHtml(payload: ReportPrintPayload) {
       <div class="muted">${escapePrintHtml(formatDateTime(new Date(report.generatedAt)))}</div>
     </div>
     <div class="rule"></div>
-    <table>
-      <tr class="grand"><td>Total Sales</td><td>${money(report.salesTotal)}</td></tr>
-      <tr><td>Paid Bills</td><td>${report.paidCount}</td></tr>
-      <tr><td>Opening Cash</td><td>${money(report.openingCash)}</td></tr>
-      <tr><td>Cash In Hand</td><td>${money(report.cashInHand)}</td></tr>
-      <tr><td>UPI</td><td>${money(report.upiTotal)}</td></tr>
-      <tr><td>Card</td><td>${money(report.cardTotal)}</td></tr>
-      <tr><td>Bank</td><td>${money(report.bankTotal)}</td></tr>
-      <tr><td>Due / Credit</td><td>${money(report.balanceTotal)}</td></tr>
-      <tr><td>Discount</td><td>${money(report.discountTotal)}</td></tr>
-      <tr><td>Expense</td><td>${money(report.expenseTotal)}</td></tr>
-      <tr><td>Bank Expense</td><td>${money(report.bankExpenseTotal)}</td></tr>
-      <tr class="grand"><td>Net Amount</td><td>${money(report.netTotal)}</td></tr>
-      <tr><td>Open Amount</td><td>${money(report.openTotal)}</td></tr>
-      <tr><td>Open Bills</td><td>${report.openCount}</td></tr>
-    </table>
-    <div class="rule"></div>
-    <div class="section">Order Type</div>
-    <table>${orderTypeRows || '<tr><td>No orders</td><td>0.00</td></tr>'}</table>
+    <table>${reportRows}</table>
+    ${
+      orderTypeRows
+        ? `<div class="rule"></div><div class="section">Order Type</div><table>${orderTypeRows}</table>`
+        : ''
+    }
     <div class="rule"></div>
     <div class="center"><strong>End of report</strong></div>
   </body>
 </html>`
+}
+
+function getThermalReportRows(report: ReportPrintPayload['report']) {
+  const candidates = [
+    { label: 'Total Sales', value: money(report.salesTotal), numericValue: report.salesTotal, strong: true, always: true },
+    { label: 'Paid Bills', value: String(report.paidCount), numericValue: report.paidCount, always: true },
+    { label: 'Opening Cash', value: money(report.openingCash), numericValue: report.openingCash },
+    { label: 'Amount Received', value: money(report.receivedTotal), numericValue: report.receivedTotal, always: true },
+    { label: 'Cash In Hand', value: money(report.cashInHand), numericValue: report.cashInHand, always: true },
+    { label: 'UPI', value: money(report.upiTotal), numericValue: report.upiTotal },
+    { label: 'Card', value: money(report.cardTotal), numericValue: report.cardTotal },
+    { label: 'Bank', value: money(report.bankTotal), numericValue: report.bankTotal },
+    { label: 'Due / Credit', value: money(report.balanceTotal), numericValue: report.balanceTotal },
+    { label: 'Discount', value: money(report.discountTotal), numericValue: report.discountTotal },
+    { label: 'Expense', value: money(report.expenseTotal), numericValue: report.expenseTotal },
+    { label: 'Net Amount', value: money(report.netTotal), numericValue: report.netTotal, strong: true, always: true },
+    { label: 'Open Amount', value: money(report.openTotal), numericValue: report.openTotal },
+    { label: 'Open Bills', value: String(report.openCount), numericValue: report.openCount },
+  ]
+
+  return candidates.filter((row) => row.always || reportNumberHasValue(row.numericValue))
 }
 
 function escapePrintHtml(value: unknown) {
@@ -9765,6 +10003,20 @@ function formatFileSize(bytes: number) {
   }
 
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function formatDatabaseBackupLabel(backup: LocalDbBackup) {
+  const lowerName = backup.fileName.toLowerCase()
+  const type = lowerName.includes('-manual-')
+    ? 'Manual backup'
+    : lowerName.includes('-before-restore-')
+      ? 'Before restore'
+      : lowerName.includes('-before-reset-')
+        ? 'Before reset'
+        : 'Auto safety backup'
+  const date = backup.updatedAt ? formatDateTime(new Date(backup.updatedAt)) : backup.fileName
+
+  return `${type} - ${date} - ${formatFileSize(backup.size)}`
 }
 
 function formatInputDate(value: Date) {
