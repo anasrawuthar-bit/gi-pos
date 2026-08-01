@@ -127,8 +127,8 @@ function registerUpdaterHandlers() {
       return updateStatus;
     }
 
-    setUpdateStatus('installing', 'Installing update and restarting...');
-    autoUpdater.quitAndInstall(false, true);
+    setUpdateStatus('installing', 'Installing update in the background. The app will reopen automatically...');
+    autoUpdater.quitAndInstall(true, true);
     return updateStatus;
   });
 }
@@ -144,7 +144,7 @@ ipcMain.handle('lan-server:stop', async () => {
 
 function setupAutoUpdater() {
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.setFeedURL({
     provider: 'generic',
     url: UPDATE_URL,
@@ -182,7 +182,7 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    setUpdateStatus('downloaded', `Version ${info.version} downloaded. Restart to install.`, {
+    setUpdateStatus('downloaded', `Version ${info.version} downloaded. Click Install to update and reopen.`, {
       latestVersion: info.version,
       updateInfo: pickUpdateInfo(info),
       percent: 100,

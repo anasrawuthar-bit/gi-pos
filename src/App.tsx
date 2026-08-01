@@ -7035,7 +7035,7 @@ function App() {
                   {updateStatus.state === 'downloaded' && (
                     <button className="small-button primary" type="button" onClick={() => void installAppUpdate()}>
                       <Save size={15} />
-                      Restart & Install
+                      Install & Reopen
                     </button>
                   )}
                 </div>
