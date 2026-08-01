@@ -2438,6 +2438,19 @@ const BASE_STYLES = `
   .release-slot span { color: #64748b; font-size: 12px; font-weight: 850; }
   .release-slot.ok { border-color: #b9efcd; background: #f0fdf4; }
   .release-slot.missing { border-color: #fed7aa; background: #fff7ed; }
+  .upload-progress-card {
+    display: none;
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid #dbe3ee;
+    border-radius: 9px;
+    background: #f8fafc;
+  }
+  .upload-progress-card.active { display: grid; }
+  .upload-progress-head { display: flex; justify-content: space-between; gap: 12px; color: #334155; font-size: 12px; font-weight: 900; }
+  .upload-progress-track { height: 10px; overflow: hidden; border-radius: 999px; background: #e2e8f0; }
+  .upload-progress-fill { width: 0%; height: 100%; background: linear-gradient(90deg, var(--teal), #22c55e); transition: width .18s ease; }
+  .upload-progress-meta { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; color: #64748b; font-size: 12px; font-weight: 850; }
   .release-upload-card .file-row {
     min-height: 82px;
     align-content: space-between;
@@ -3356,6 +3369,19 @@ const ADMIN_HTML = `<!doctype html>
             <label>Setup EXE <input id="setupExeFile" type="file" accept=".exe"></label>
             <label>EXE Blockmap <input id="setupBlockmapFile" type="file" accept=".blockmap"></label>
           </div>
+          <div class="upload-progress-card" id="uploadProgressCard" aria-live="polite">
+            <div class="upload-progress-head">
+              <span id="uploadProgressTitle">Preparing upload...</span>
+              <strong id="uploadProgressPercent">0%</strong>
+            </div>
+            <div class="upload-progress-track">
+              <div class="upload-progress-fill" id="uploadProgressFill"></div>
+            </div>
+            <div class="upload-progress-meta">
+              <span id="uploadProgressBytes">0 B / 0 B</span>
+              <span id="uploadProgressDetail">Waiting</span>
+            </div>
+          </div>
           <div class="row release-actions">
             <button class="primary" id="uploadUpdateBtn">Upload Update</button>
             <div class="release-action-buttons">
@@ -3418,6 +3444,13 @@ const ADMIN_HTML = `<!doctype html>
     const adminPlanRows = document.getElementById('adminPlanRows');
     const clientSearchInput = document.getElementById('clientSearch');
     const clientStatusFilter = document.getElementById('clientStatusFilter');
+    const uploadUpdateBtn = document.getElementById('uploadUpdateBtn');
+    const uploadProgressCard = document.getElementById('uploadProgressCard');
+    const uploadProgressTitle = document.getElementById('uploadProgressTitle');
+    const uploadProgressPercent = document.getElementById('uploadProgressPercent');
+    const uploadProgressFill = document.getElementById('uploadProgressFill');
+    const uploadProgressBytes = document.getElementById('uploadProgressBytes');
+    const uploadProgressDetail = document.getElementById('uploadProgressDetail');
     const planCatalog = ${PLAN_CATALOG_JSON};
     let adminRestaurants = [];
     tokenInput.value = localStorage.getItem('giAdminToken') || '';
@@ -3443,6 +3476,63 @@ const ADMIN_HTML = `<!doctype html>
     }
     function formatDate(value) {
       return value ? new Date(value).toLocaleString() : '';
+    }
+    function formatUploadBytes(value) {
+      const bytes = Number(value || 0);
+      if (!bytes) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB'];
+      const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+      return (bytes / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1) + ' ' + units[index];
+    }
+    function setUploadProgress(percent, loaded, total, detail) {
+      const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent || 0))));
+      uploadProgressCard.classList.add('active');
+      uploadProgressPercent.textContent = safePercent + '%';
+      uploadProgressFill.style.width = safePercent + '%';
+      uploadProgressBytes.textContent = formatUploadBytes(loaded) + ' / ' + formatUploadBytes(total);
+      uploadProgressDetail.textContent = detail || 'Uploading';
+    }
+    function uploadAdminFormData(path, form, totalBytes) {
+      return new Promise(function (resolve, reject) {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', path);
+        xhr.setRequestHeader('x-admin-token', tokenInput.value);
+
+        xhr.upload.onprogress = function (event) {
+          const total = event.lengthComputable ? event.total : totalBytes;
+          const loaded = event.loaded || 0;
+          const percent = total ? (loaded / total) * 100 : 0;
+          setUploadProgress(percent, loaded, total, 'Uploading to cloud');
+        };
+
+        xhr.onload = function () {
+          let result = {};
+          try {
+            result = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+          } catch {
+            reject(new Error('Upload completed but server response was invalid.'));
+            return;
+          }
+
+          if (xhr.status < 200 || xhr.status >= 300 || result.ok === false) {
+            reject(new Error(result.error || 'Upload failed'));
+            return;
+          }
+
+          setUploadProgress(100, totalBytes, totalBytes, 'Upload complete. Validating files...');
+          resolve(result);
+        };
+
+        xhr.onerror = function () {
+          reject(new Error('Upload failed. Check cloud server connection.'));
+        };
+
+        xhr.onabort = function () {
+          reject(new Error('Upload cancelled.'));
+        };
+
+        xhr.send(form);
+      });
     }
     function getPlan(planName) {
       const value = String(planName || '').toLowerCase();
@@ -3600,13 +3690,20 @@ const ADMIN_HTML = `<!doctype html>
       form.append('latestYml', latest);
       form.append('setupExe', setup);
       form.append('setupBlockmap', blockmap);
-      setUpdateStatus('Uploading update files. Please wait...', '');
-      const result = await adminFetchJson('/api/v1/admin/updates/windows', {
-        method: 'POST',
-        body: form
-      });
-      renderUpdateInfo(result);
-      setUpdateStatus(result.message || 'Update uploaded successfully.', 'ok');
+      const totalBytes = latest.size + setup.size + blockmap.size;
+      uploadUpdateBtn.disabled = true;
+      setUpdateStatus('Uploading update files. Keep this page open.', '');
+      uploadProgressTitle.textContent = 'Uploading Windows update files';
+      setUploadProgress(0, 0, totalBytes, 'Starting upload');
+
+      try {
+        const result = await uploadAdminFormData('/api/v1/admin/updates/windows', form, totalBytes);
+        renderUpdateInfo(result);
+        setUpdateStatus(result.message || 'Update uploaded successfully.', 'ok');
+        setUploadProgress(100, totalBytes, totalBytes, 'Ready for app updater');
+      } finally {
+        uploadUpdateBtn.disabled = false;
+      }
     }
     function render(restaurants) {
       adminRestaurants = Array.isArray(restaurants) ? restaurants : adminRestaurants;
@@ -3736,7 +3833,7 @@ const ADMIN_HTML = `<!doctype html>
     document.getElementById('refreshUpdateBtn').addEventListener('click', function () {
       loadUpdateInfo().catch(function (error) { setUpdateStatus(error.message, 'error'); });
     });
-    document.getElementById('uploadUpdateBtn').addEventListener('click', function () {
+    uploadUpdateBtn.addEventListener('click', function () {
       uploadUpdate().catch(function (error) { setUpdateStatus(error.message, 'error'); });
     });
     clientSearchInput.addEventListener('input', function () {
