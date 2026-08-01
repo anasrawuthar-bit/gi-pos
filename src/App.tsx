@@ -7509,44 +7509,41 @@ function App() {
                 </label>
               )}
 
-              {cart.length > 0 && (
-                <div className="bill-summary-breakdown" style={{ display: 'grid', gap: '4px', fontSize: '12px', color: '#4b5563', borderBottom: '1px dashed #e5e7eb', paddingBottom: '6px', marginBottom: '6px', marginTop: '6px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Subtotal</span>
-                    <strong>{money(totals.subtotal)}</strong>
-                  </div>
+              {cart.length > 0 &&
+                (totals.discount > 0 || taxExempt || totals.tax > 0 || totals.serviceCharge > 0 || businessProfile.defaultGstRate > 0) && (
+                <div className="bill-adjustment-summary">
                   {totals.discount > 0 && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: '#dc2626' }}>
+                    <div className="bill-adjustment-row discount">
                       <span>Discount</span>
                       <strong>-{money(totals.discount)}</strong>
                     </div>
                   )}
                   {taxExempt ? (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: '#16a34a' }}>
+                    <div className="bill-adjustment-row success">
                       <span>Tax</span>
                       <strong>Exempt</strong>
                     </div>
                   ) : totals.tax > 0 && (
                     <>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <div className="bill-adjustment-row">
                         <span>CGST</span>
                         <strong>{money(totals.tax / 2)}</strong>
                       </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <div className="bill-adjustment-row">
                         <span>SGST</span>
                         <strong>{money(totals.tax / 2)}</strong>
                       </div>
                     </>
                   )}
                   {totals.serviceCharge > 0 && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <div className="bill-adjustment-row">
                       <span>Service Charge</span>
                       <strong>{money(totals.serviceCharge)}</strong>
                     </div>
                   )}
                   {businessProfile.defaultGstRate > 0 && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '12px' }}>
+                    <div className="bill-tax-toggle-row">
+                      <label>
                         <input
                           type="checkbox"
                           checked={taxExempt}

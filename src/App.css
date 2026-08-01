@@ -759,6 +759,54 @@ button {
   font-size: 16px;
 }
 
+.bill-adjustment-summary {
+  display: grid;
+  gap: 4px;
+  align-content: center;
+  min-height: 38px;
+  padding: 6px 8px;
+  color: #4b5563;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 5px;
+  font-size: 12px;
+}
+
+.bill-adjustment-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.bill-adjustment-row strong {
+  color: #111827;
+}
+
+.bill-adjustment-row.discount,
+.bill-adjustment-row.discount strong {
+  color: #dc2626;
+}
+
+.bill-adjustment-row.success,
+.bill-adjustment-row.success strong {
+  color: #16a34a;
+}
+
+.bill-tax-toggle-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.bill-tax-toggle-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #4b5563;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .grand-total {
   display: grid;
   align-content: center;
@@ -3301,6 +3349,20 @@ button {
   color: #ffffff;
   background: var(--primary);
   border-color: var(--primary-strong);
+}
+
+.pos-shell .bill-adjustment-summary {
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.pos-shell .bill-adjustment-row strong {
+  color: var(--text);
+}
+
+.pos-shell .bill-tax-toggle-row label {
+  color: var(--text-muted);
 }
 
 .pos-shell .customer-picker-row.active {
