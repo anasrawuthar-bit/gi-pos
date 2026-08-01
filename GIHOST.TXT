@@ -420,8 +420,8 @@ Recommended admin panel method:
   5. Select all three files from the desktop build release folder:
 
        latest.yml
-       GI POS Restaurant Setup 1.1.19.exe
-       GI POS Restaurant Setup 1.1.19.exe.blockmap
+       GI POS Restaurant Setup 1.1.24.exe
+       GI POS Restaurant Setup 1.1.24.exe.blockmap
 
   6. Click Upload Update.
 
@@ -443,8 +443,8 @@ After building the Windows app, copy release files to:
 Required files:
 
   latest.yml
-  GI POS Restaurant Setup 1.1.19.exe
-  GI POS Restaurant Setup 1.1.19.exe.blockmap
+  GI POS Restaurant Setup 1.1.24.exe
+  GI POS Restaurant Setup 1.1.24.exe.blockmap
 
 Create folder if missing:
 
@@ -461,6 +461,35 @@ Client portal download button uses:
 Electron auto updater checks:
 
   /updates/win/latest.yml
+
+GitHub version archive:
+
+  The cloud update folder should keep only the current version.
+  Previous versions should be stored in GitHub Releases, one release per app version.
+
+  Requirements:
+
+    gh auth login
+
+  Build and archive:
+
+    npm run dist:win
+    npm run release:archive -- --notes "Brief release notes for this version"
+
+  Dry run:
+
+    npm run release:archive:dry -- --notes "Test archive"
+
+  Longer release notes:
+
+    npm run release:archive -- --notes-file RELEASE_NOTES.md
+
+  The script validates latest.yml, creates/pushes tag v<version>, and uploads:
+
+    latest.yml
+    GI POS Restaurant Setup <version>.exe
+    GI POS Restaurant Setup <version>.exe.blockmap
+    GI POS Restaurant Portable <version>.exe, if available
 
 
 18. UPDATE CLOUD CODE FROM GITHUB

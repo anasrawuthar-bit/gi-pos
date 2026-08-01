@@ -12,6 +12,8 @@
     "build": "tsc -b && vite build",
     "icon:build": "node scripts/generate-icon.cjs",
     "dist:win": "npm run icon:build && npm run build && electron-builder --win nsis portable --x64",
+    "release:archive": "node scripts/archive-github-release.cjs",
+    "release:archive:dry": "node scripts/archive-github-release.cjs --dry-run --allow-dirty",
     "dist:mac": "npm run icon:build && npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip --x64 --arm64",
     "pack:win": "npm run icon:build && npm run build && electron-builder --win --dir",
     "pack:mac": "npm run icon:build && npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --dir",

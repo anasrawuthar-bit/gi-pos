@@ -236,8 +236,8 @@ https://goldensea.gihostings.in/admin
 Use `Windows App Update` and select all three files from the desktop build `release/` folder:
 
 - `latest.yml`
-- `GI POS Restaurant Setup 1.1.22.exe`
-- `GI POS Restaurant Setup 1.1.22.exe.blockmap`
+- `GI POS Restaurant Setup 1.1.24.exe`
+- `GI POS Restaurant Setup 1.1.24.exe.blockmap`
 
 The admin panel validates that `latest.yml` points to the selected setup `.exe` and that the `.blockmap` filename matches the setup file.
 
@@ -246,3 +246,23 @@ If the VPS shows `413 Request Entity Too Large`, increase Nginx `client_max_body
 Manual fallback: copy those files into `cloud/updates/win/` on the VPS.
 
 You can also set `GI_UPDATE_DIR=/absolute/path/to/updates/win` before starting the cloud server.
+
+## GitHub Version Archive
+
+Keep only the current update files in `cloud/updates/win` or the configured `GI_UPDATE_DIR`.
+Previous setup files should be archived in GitHub Releases, one release per app version.
+
+From the desktop repo:
+
+```powershell
+npm run dist:win
+npm run release:archive -- --notes "Brief release notes for this version"
+```
+
+For longer notes:
+
+```powershell
+npm run release:archive -- --notes-file RELEASE_NOTES.md
+```
+
+The archive script validates `latest.yml`, creates/pushes tag `v<version>`, and uploads the setup exe, blockmap, `latest.yml`, and portable exe when available.

@@ -901,6 +901,8 @@ function App() {
   const businessProfileRef = useRef(businessProfile)
   const cloudSyncSettingsRef = useRef(cloudSyncSettings)
   const staffUsersRef = useRef(staffUsers)
+  const savedOrdersRef = useRef(savedOrders)
+  const customersRef = useRef(customers)
   const qrOrdersRef = useRef(qrOrders)
   const runCloudSyncRef = useRef<(trigger: 'manual' | 'auto') => Promise<boolean>>(async () => false)
   const refreshLocalServerStatus = useCallback(async () => {
@@ -1375,6 +1377,14 @@ function App() {
   useEffect(() => {
     staffUsersRef.current = staffUsers
   }, [staffUsers])
+
+  useEffect(() => {
+    savedOrdersRef.current = savedOrders
+  }, [savedOrders])
+
+  useEffect(() => {
+    customersRef.current = customers
+  }, [customers])
 
   useEffect(() => {
     qrOrdersRef.current = qrOrders
@@ -3979,7 +3989,7 @@ function App() {
       setBillFinancialYear(currentFinancialYear)
       setBillNumber((value) =>
         getNextBillNumber(
-          savedOrders,
+          savedOrdersRef.current,
           billFinancialYear === currentFinancialYear ? value : firstBillNumber - 1,
           new Date(),
         ),
@@ -3987,53 +3997,89 @@ function App() {
     }
   }
 
-  function saveCurrentOrder(status: OrderStatus, creditCustomer?: CustomerProfile) {
+  function buildCurrentOrderSnapshot(status: OrderStatus, creditCustomer?: CustomerProfile) {
     const now = new Date().toISOString()
-    const existingOrder = savedOrders.find((order) => order.id === activeOrderId)
+    const existingOrder = savedOrdersRef.current.find((order) => order.id === activeOrderId)
     const savedCustomerId = creditCustomer?.id ?? selectedCustomerId
     const savedCustomerName = creditCustomer?.name ?? customer
     const savedTables = getCurrentDiningTables(seatingMode, table, selectedTables)
     const savedTableLabel = getSeatingDisplayLabel(seatingMode, table, savedTables, diningGroupName)
-    const order: SavedOrder = {
+
+    return {
       id: activeOrderId,
       billNo: String(billNumber),
       status,
       orderType,
       table: savedTableLabel,
       seatingMode,
-      tables: savedTables,
+      tables: [...savedTables],
       diningGroupName: seatingMode === 'group' ? diningGroupName.trim() : '',
       customerId: savedCustomerId || undefined,
       customer: savedCustomerName,
-      cart,
+      cart: cart.map((line) => ({ ...line })),
       discountMode,
       discountPercent,
       discountAmount,
       servicePercent,
       taxExempt,
       paymentMethod,
-      paymentBreakdown,
+      paymentBreakdown: { ...paymentBreakdown },
       amountReceived,
-      totals,
+      totals: { ...totals },
       creditApplied: existingOrder?.creditApplied ?? false,
       createdAt: existingOrder?.createdAt ?? now,
       updatedAt: now,
     }
+  }
 
-    setSavedOrders((orders) => {
-      const existingIndex = orders.findIndex((savedOrder) => savedOrder.id === activeOrderId)
+  function upsertSavedOrder(order: SavedOrder, orders = savedOrdersRef.current) {
+    const existingIndex = orders.findIndex((savedOrder) => savedOrder.id === order.id)
 
-      if (existingIndex === -1) {
-        return [order, ...orders]
-      }
+    if (existingIndex === -1) {
+      return [order, ...orders]
+    }
 
-      return orders.map((savedOrder) => (savedOrder.id === activeOrderId ? order : savedOrder))
+    return orders.map((savedOrder) => (savedOrder.id === order.id ? order : savedOrder))
+  }
+
+  async function persistLocalValueNow(key: string, value: unknown) {
+    const serializedValue = JSON.stringify(value)
+    localStorage.setItem(key, serializedValue)
+
+    if (window.posDb) {
+      await window.posDb.set(key, serializedValue)
+    }
+  }
+
+  async function persistSavedOrdersNow(nextOrders: SavedOrder[]) {
+    await persistLocalValueNow('pos-orders', nextOrders)
+  }
+
+  function saveCurrentOrder(status: OrderStatus, creditCustomer?: CustomerProfile) {
+    const order = buildCurrentOrderSnapshot(status, creditCustomer)
+    const nextOrders = upsertSavedOrder(order)
+
+    savedOrdersRef.current = nextOrders
+    setSavedOrders(nextOrders)
+    void persistSavedOrdersNow(nextOrders).catch((error) => {
+      setPrinterStatus(`Order save failed: ${getErrorMessage(error)}`)
     })
 
     return order
   }
 
-  function savePaidOrder() {
+  async function saveCurrentOrderDurable(status: OrderStatus, creditCustomer?: CustomerProfile) {
+    const order = buildCurrentOrderSnapshot(status, creditCustomer)
+    const nextOrders = upsertSavedOrder(order)
+
+    savedOrdersRef.current = nextOrders
+    setSavedOrders(nextOrders)
+    await persistSavedOrdersNow(nextOrders)
+
+    return order
+  }
+
+  async function savePaidOrder() {
     if (!cart.length) {
       setPrinterStatus('Add items before saving bill')
       return
@@ -4048,8 +4094,13 @@ function App() {
       return
     }
 
-    const order = saveCurrentOrder('paid', creditCustomer === true ? undefined : creditCustomer)
-    completeBill(order, 'saved')
+    setPrinterStatus('Saving bill...')
+    try {
+      const order = await saveCurrentOrderDurable('paid', creditCustomer === true ? undefined : creditCustomer)
+      completeBill(order, 'saved')
+    } catch (error) {
+      setPrinterStatus(`Bill not saved: ${getErrorMessage(error)}`)
+    }
   }
 
   function holdCurrentOrder() {
@@ -4256,8 +4307,8 @@ function App() {
 
     const now = new Date().toISOString()
     const existing = selectedCustomerId
-      ? customers.find((profile) => profile.id === selectedCustomerId)
-      : customers.find(
+      ? customersRef.current.find((profile) => profile.id === selectedCustomerId)
+      : customersRef.current.find(
           (profile) =>
             profile.name.trim().toLowerCase() === name.toLowerCase() &&
             (!customerPhone.trim() || profile.phone.trim() === customerPhone.trim()),
@@ -4274,12 +4325,14 @@ function App() {
       updatedAt: now,
     }
 
-    setCustomers((list) => {
-      if (existing) {
-        return list.map((customerProfile) => (customerProfile.id === existing.id ? profile : customerProfile))
-      }
+    const nextCustomers = existing
+      ? customersRef.current.map((customerProfile) => (customerProfile.id === existing.id ? profile : customerProfile))
+      : [profile, ...customersRef.current]
 
-      return [profile, ...list]
+    customersRef.current = nextCustomers
+    setCustomers(nextCustomers)
+    void persistLocalValueNow('pos-customers', nextCustomers).catch((error) => {
+      setPrinterStatus(`Customer save failed: ${getErrorMessage(error)}`)
     })
     setSelectedCustomerId(profile.id)
     setCustomer(profile.name)
@@ -4324,13 +4377,16 @@ function App() {
       return
     }
 
-    setCustomers((list) =>
-      list.map((profile) =>
-        profile.id === selectedCustomerProfile.id
-          ? { ...profile, creditBalance: 0, updatedAt: new Date().toISOString() }
-          : profile,
-      ),
+    const nextCustomers = customersRef.current.map((profile) =>
+      profile.id === selectedCustomerProfile.id
+        ? { ...profile, creditBalance: 0, updatedAt: new Date().toISOString() }
+        : profile,
     )
+    customersRef.current = nextCustomers
+    setCustomers(nextCustomers)
+    void persistLocalValueNow('pos-customers', nextCustomers).catch((error) => {
+      setPrinterStatus(`Customer due save failed: ${getErrorMessage(error)}`)
+    })
     setPrinterStatus(`${selectedCustomerProfile.name} due marked as paid`)
     recordAudit('due_marked_paid', `${selectedCustomerProfile.name} due marked as paid`)
   }
@@ -4340,22 +4396,27 @@ function App() {
       return
     }
 
-    setCustomers((list) =>
-      list.map((profile) =>
-        profile.id === order.customerId
-          ? {
-              ...profile,
-              creditBalance: roundMoney(profile.creditBalance + order.totals.balance),
-              totalCredit: roundMoney(profile.totalCredit + order.totals.balance),
-              updatedAt: new Date().toISOString(),
-            }
-          : profile,
-      ),
+    const nextCustomers = customersRef.current.map((profile) =>
+      profile.id === order.customerId
+        ? {
+            ...profile,
+            creditBalance: roundMoney(profile.creditBalance + order.totals.balance),
+            totalCredit: roundMoney(profile.totalCredit + order.totals.balance),
+            updatedAt: new Date().toISOString(),
+          }
+        : profile,
+    )
+    const nextOrders = savedOrdersRef.current.map((savedOrder) =>
+      savedOrder.id === order.id ? { ...savedOrder, creditApplied: true } : savedOrder,
     )
 
-    setSavedOrders((orders) =>
-      orders.map((savedOrder) => (savedOrder.id === order.id ? { ...savedOrder, creditApplied: true } : savedOrder)),
-    )
+    customersRef.current = nextCustomers
+    savedOrdersRef.current = nextOrders
+    setCustomers(nextCustomers)
+    setSavedOrders(nextOrders)
+    void Promise.all([persistLocalValueNow('pos-customers', nextCustomers), persistSavedOrdersNow(nextOrders)]).catch((error) => {
+      setPrinterStatus(`Customer credit save failed: ${getErrorMessage(error)}`)
+    })
   }
 
   function saveCategory() {
@@ -4728,8 +4789,13 @@ function App() {
           return
         }
 
-        const order = saveCurrentOrder('paid', creditCustomer === true ? undefined : creditCustomer)
-        completeBill(order, 'printed')
+        try {
+          const order = await saveCurrentOrderDurable('paid', creditCustomer === true ? undefined : creditCustomer)
+          completeBill(order, 'printed')
+        } catch (error) {
+          setPrinterStatus(`Bill not saved. Print stopped: ${getErrorMessage(error)}`)
+          return
+        }
       }
       window.print()
       return
@@ -4749,17 +4815,23 @@ function App() {
       return
     }
 
-    const order =
-      saveBeforePrint && creditCustomer !== true
-        ? saveCurrentOrder('paid', creditCustomer)
-        : saveBeforePrint
-          ? saveCurrentOrder('paid')
-          : null
-
     if (saveBeforePrint) {
       setPrinterStatus('Saving and printing receipt...')
     } else {
       setPrinterStatus('Printing receipt...')
+    }
+
+    let order: SavedOrder | null = null
+    if (saveBeforePrint) {
+      try {
+        order =
+          creditCustomer !== true
+            ? await saveCurrentOrderDurable('paid', creditCustomer)
+            : await saveCurrentOrderDurable('paid')
+      } catch (error) {
+        setPrinterStatus(`Bill not saved. Print stopped: ${getErrorMessage(error)}`)
+        return
+      }
     }
 
     try {

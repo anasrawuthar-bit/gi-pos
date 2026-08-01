@@ -5,7 +5,7 @@ Desktop restaurant POS application built with Electron, React, TypeScript, and V
 ## Version
 
 - App owner: GI
-- Version: 1.1.23
+- Version: 1.1.24
 
 ## Current Flow
 
@@ -39,8 +39,8 @@ https://goldensea.gihostings.in/updates/win/
 Required files:
 
 - `latest.yml`
-- `GI POS Restaurant Setup 1.1.23.exe`
-- `GI POS Restaurant Setup 1.1.23.exe.blockmap`
+- `GI POS Restaurant Setup 1.1.24.exe`
+- `GI POS Restaurant Setup 1.1.24.exe.blockmap`
 
 Portable `.exe` can be shared manually, but installed setup is the correct flow for automatic updates.
 
@@ -51,3 +51,35 @@ cloud/updates/win/
 ```
 
 Or set `GI_UPDATE_DIR` to another folder and keep the URL as `/updates/win/`.
+
+## Version Archive on GitHub
+
+Do not keep every old setup file in the cloud update folder. The cloud update folder should contain only the current updater files.
+
+Archive each finished version in GitHub Releases:
+
+```bash
+npm run dist:win
+npm run release:archive -- --notes "Brief release notes for this version"
+```
+
+The archive script uploads these files from `release/` into a GitHub Release tagged with the app version:
+
+- `latest.yml`
+- `GI POS Restaurant Setup <version>.exe`
+- `GI POS Restaurant Setup <version>.exe.blockmap`
+- `GI POS Restaurant Portable <version>.exe`, when present
+
+Use a notes file when the description is longer:
+
+```bash
+npm run release:archive -- --notes-file RELEASE_NOTES.md
+```
+
+Use dry run before publishing:
+
+```bash
+npm run release:archive:dry -- --notes "Test archive"
+```
+
+Requirement: GitHub CLI must be installed and logged in with `gh auth login`.
