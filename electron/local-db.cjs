@@ -17,6 +17,8 @@ const SYNCABLE_KV_KEYS = new Set([
   'pos-menu-items',
   'pos-opening-cash-balances',
   'pos-orders',
+  'pos-app-configuration',
+  'pos-service-staff',
   'pos-staff-users',
   'pos-staff-user-directory',
 ]);

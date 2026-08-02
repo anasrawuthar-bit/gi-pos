@@ -89,6 +89,14 @@ export type LocalServerStatus = {
   }
 }
 
+export type FoodImageSearchResult = {
+  ok: boolean
+  dataUrl?: string
+  title?: string
+  sourceUrl?: string
+  error?: string
+}
+
 declare global {
   interface Window {
     posPrinter?: {
@@ -127,6 +135,14 @@ declare global {
     posServer?: {
       getStatus: () => Promise<LocalServerStatus>
       stop: () => Promise<{ ok: boolean }>
+    }
+    posImages?: {
+      searchFoodImage: (payload: {
+        name: string
+        category?: string
+        tags?: string[]
+        variant?: number
+      }) => Promise<FoodImageSearchResult>
     }
   }
 }

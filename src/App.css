@@ -918,8 +918,14 @@ button {
   width: min(820px, calc(100vw - 32px));
 }
 
-.orders-panel.has-date-filter {
+.orders-panel {
+  height: min(680px, calc(100vh - 40px));
   grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.orders-panel.has-date-filter {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
 .quick-panel {
@@ -1696,6 +1702,641 @@ button {
 .printer-profile-list span {
   color: #64748b;
   font-size: 12px;
+}
+
+.printer-dashboard-layout,
+.printer-config-layout {
+  display: grid;
+  gap: 16px;
+  align-items: start;
+}
+
+.printer-dashboard-layout {
+  grid-template-columns: minmax(300px, 360px) minmax(560px, 1fr);
+}
+
+.printer-config-layout {
+  max-width: 1040px;
+  margin: 0 auto;
+  grid-template-columns: 1fr;
+}
+
+.printer-add-card,
+.printer-list-card,
+.printer-routing-card {
+  align-content: start;
+}
+
+.printer-config-view .printer-profile-editor,
+.printer-config-view .printer-routing-card {
+  padding: 18px;
+  border-radius: 10px;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.07);
+}
+
+.printer-config-view .printer-profile-editor {
+  gap: 16px;
+}
+
+.printer-config-view .printer-routing-card {
+  display: grid;
+  gap: 16px;
+}
+
+.printer-config-view .panel-actions {
+  justify-content: flex-end;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid #e5eaf0;
+}
+
+.printer-add-form {
+  display: grid;
+  gap: 12px;
+}
+
+.printer-add-hero {
+  min-height: 250px;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 12px;
+  padding: 22px;
+  text-align: center;
+  background: #f8fafc;
+  border: 1px dashed #b8c3d1;
+  border-radius: 10px;
+}
+
+.printer-add-hero strong {
+  color: #111827;
+  font-size: 18px;
+}
+
+.printer-add-hero span {
+  max-width: 300px;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.printer-add-actions,
+.printer-summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.printer-status-line {
+  margin-top: 12px;
+  padding: 10px 12px;
+  color: #0f6470;
+  background: #ecfeff;
+  border: 1px solid #a5f3fc;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.printer-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.printer-summary-card {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-radius: 8px;
+}
+
+.printer-summary-card.minimal {
+  min-height: 150px;
+  align-content: space-between;
+  border-color: #dbe5ee;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+}
+
+.printer-summary-card.minimal .printer-summary-top {
+  grid-template-columns: 48px minmax(0, 1fr);
+}
+
+.printer-summary-card.minimal .printer-summary-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+}
+
+.printer-summary-card.minimal .printer-summary-top strong {
+  font-size: 17px;
+}
+
+.printer-summary-card.minimal .printer-summary-actions {
+  justify-content: flex-end;
+  padding-top: 10px;
+  border-top: 1px solid #e5eaf0;
+}
+
+.printer-summary-top {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.printer-summary-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  color: #087f8c;
+  background: #ecfeff;
+  border: 1px solid #a5f3fc;
+  border-radius: 8px;
+}
+
+.printer-summary-top strong,
+.printer-summary-top span,
+.printer-route-summary strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.printer-summary-top strong {
+  display: block;
+  color: #111827;
+  font-size: 16px;
+}
+
+.printer-summary-top span,
+.printer-route-summary span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.printer-route-summary,
+.route-chip-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.printer-route-summary {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  padding: 9px 10px;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 7px;
+}
+
+.printer-route-summary.compact {
+  grid-template-columns: 92px minmax(0, 1fr);
+}
+
+.printer-route-summary strong {
+  color: #111827;
+  font-size: 13px;
+}
+
+.printer-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 28px;
+}
+
+.printer-chip-row span {
+  padding: 5px 8px;
+  color: #0f6470;
+  background: #ecfeff;
+  border: 1px solid #a5f3fc;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.route-chip-summary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.route-chip-summary div,
+.route-empty-state {
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 8px;
+}
+
+.route-chip-summary span {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.route-chip-summary strong {
+  display: block;
+  margin-top: 5px;
+  color: #111827;
+  line-height: 1.35;
+}
+
+.routing-section-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.routing-section-head strong {
+  color: #111827;
+}
+
+.routing-section-head span,
+.route-empty-state {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.route-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.route-add-row select {
+  min-width: 0;
+}
+
+.route-option-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.route-check-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  color: #111827;
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-radius: 8px;
+  font-weight: 900;
+}
+
+.route-check-card input {
+  width: 16px;
+  height: 16px;
+  accent-color: #0f8b94;
+}
+
+.route-check-card span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.full-page-panel {
+  width: 100%;
+  max-height: none;
+  min-height: 0;
+  box-shadow: none;
+}
+
+.menu-setup-view .menu-editor-panel,
+.printer-manage-view .printer-panel {
+  width: 100%;
+  max-height: none;
+  padding: 16px;
+}
+
+.menu-setup-view .editor-layout {
+  grid-template-columns: minmax(280px, 0.52fr) minmax(620px, 1.48fr);
+  align-items: start;
+}
+
+.menu-setup-view .item-editor-list {
+  max-height: calc(100vh - 520px);
+}
+
+.menu-setup-view .item-editor-row .row-main {
+  grid-template-columns: 42px minmax(180px, 1fr) auto;
+}
+
+.menu-setup-view .item-editor-row .row-main span:not(.item-row-thumb) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.printer-manage-view .printer-manager-layout {
+  grid-template-columns: minmax(310px, 0.68fr) minmax(620px, 1.32fr);
+  align-items: start;
+}
+
+.printer-manage-view .printer-panel {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.printer-profile-sidebar,
+.printer-profile-editor {
+  border-radius: 8px;
+}
+
+.printer-profile-sidebar {
+  position: sticky;
+  top: 106px;
+}
+
+.printer-profile-editor {
+  padding: 16px;
+  background: #ffffff;
+}
+
+.printer-profile-editor .segmented {
+  padding: 4px;
+  background: #eef2f7;
+  border: 1px solid #d7dce3;
+  border-radius: 8px;
+}
+
+.printer-profile-editor .segmented button {
+  min-height: 42px;
+  border-radius: 6px;
+}
+
+.printer-profile-editor .panel-grid,
+.printer-profile-editor .panel-grid.two,
+.printer-profile-editor .paper-row,
+.printer-profile-editor .profile-status-card {
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 8px;
+}
+
+.printer-profile-editor .panel-actions {
+  position: sticky;
+  bottom: 10px;
+  padding-top: 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0), #ffffff 35%);
+}
+
+.service-staff-page-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.8fr) minmax(520px, 1.2fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.service-staff-form {
+  grid-template-columns: 1fr 180px;
+}
+
+.service-staff-grid {
+  display: grid;
+  gap: 9px;
+}
+
+.service-staff-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px 38px;
+  gap: 8px;
+  align-items: center;
+  padding: 9px;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 7px;
+}
+
+.service-staff-main {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  text-align: left;
+}
+
+.service-staff-main span {
+  display: grid;
+  place-items: center;
+  min-height: 36px;
+  color: #ffffff;
+  background: #0f8b94;
+  border-radius: 6px;
+  font-weight: 900;
+}
+
+.service-staff-main strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 280px));
+  gap: 14px;
+  align-items: start;
+}
+
+.settings-launch-tile {
+  min-height: 210px;
+}
+
+.configuration-layout {
+  display: grid;
+  grid-template-columns: minmax(420px, 1fr) minmax(320px, 0.7fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.configuration-card {
+  display: grid;
+  gap: 14px;
+}
+
+.configuration-option {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 14px;
+  color: #111827;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 8px;
+}
+
+.configuration-option input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: #0f8b94;
+}
+
+.configuration-option div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.configuration-option strong {
+  color: #111827;
+  font-size: 15px;
+}
+
+.configuration-option span {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.configuration-summary {
+  display: grid;
+  gap: 9px;
+}
+
+.configuration-summary div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 8px;
+}
+
+.configuration-summary span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.configuration-summary strong {
+  color: #111827;
+}
+
+.staff-code-panel {
+  gap: 12px;
+}
+
+.staff-code-preview {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 7px;
+}
+
+.staff-code-preview span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.staff-code-preview strong {
+  color: #111827;
+  font-size: 18px;
+}
+
+.staff-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.staff-picker-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.staff-picker-title strong {
+  color: #111827;
+}
+
+.staff-picker-title span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.staff-picker-list {
+  display: grid;
+  gap: 7px;
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.staff-picker-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  padding: 9px;
+  color: #111827;
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-radius: 7px;
+  text-align: left;
+}
+
+.staff-picker-row span {
+  display: grid;
+  place-items: center;
+  min-height: 32px;
+  color: #0f8b94;
+  background: #e6f7f9;
+  border-radius: 5px;
+  font-weight: 900;
+}
+
+.staff-picker-row strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.staff-picker-row:hover,
+.staff-picker-row.active {
+  border-color: #0f8b94;
+  background: #eefafa;
+}
+
+.empty-note {
+  padding: 12px;
+  color: #64748b;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 7px;
+  font-weight: 800;
 }
 
 .printer-profile-list button.active span {
@@ -2639,6 +3280,8 @@ button {
   background: #ffffff;
   border: 1px solid #d7dce3;
   border-radius: 7px;
+  position: relative;
+  z-index: 2;
 }
 
 .orders-select-toolbar label,
@@ -2823,6 +3466,19 @@ button {
 
   .workspace {
     grid-template-columns: 78px minmax(360px, 1fr) minmax(500px, 52vw);
+  }
+
+  .menu-setup-view .editor-layout,
+  .printer-manage-view .printer-manager-layout,
+  .printer-dashboard-layout,
+  .printer-config-layout,
+  .configuration-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .printer-profile-sidebar,
+  .printer-profile-editor .panel-actions {
+    position: static;
   }
 }
 
@@ -3073,6 +3729,11 @@ button {
 .pos-shell .customer-readonly-head strong,
 .pos-shell .customer-due-row strong,
 .pos-shell .printer-profile-list strong,
+.pos-shell .printer-summary-top strong,
+.pos-shell .printer-add-hero strong,
+.pos-shell .printer-route-summary strong,
+.pos-shell .route-chip-summary strong,
+.pos-shell .routing-section-head strong,
 .pos-shell .profile-status-card strong,
 .pos-shell .part-auto-amount strong {
   color: var(--text);
@@ -3099,6 +3760,12 @@ button {
 .pos-shell .customer-due-row span,
 .pos-shell .empty-customer-list,
 .pos-shell .printer-profile-list span,
+.pos-shell .printer-summary-top span,
+.pos-shell .printer-add-hero span,
+.pos-shell .printer-route-summary span,
+.pos-shell .route-chip-summary span,
+.pos-shell .routing-section-head span,
+.pos-shell .route-empty-state,
 .pos-shell .profile-status-card span,
 .pos-shell .part-method-select span,
 .pos-shell .part-auto-amount span,
@@ -3114,6 +3781,7 @@ button {
 .pos-shell .panel-grid input,
 .pos-shell .panel-grid select,
 .pos-shell .profile-add-row input,
+.pos-shell .route-add-row select,
 .pos-shell .amount-field input,
 .pos-shell .inline-form input,
 .pos-shell .item-form input,
@@ -3256,9 +3924,23 @@ button {
 .pos-shell .customer-due-row,
 .pos-shell .customer-filter-tabs button,
 .pos-shell .empty-customer-list,
+.pos-shell .service-staff-card,
+.pos-shell .service-staff-main,
+.pos-shell .staff-code-preview,
+.pos-shell .staff-picker-title,
+.pos-shell .staff-picker-row,
+.pos-shell .empty-note,
+.pos-shell .configuration-option,
+.pos-shell .configuration-summary div,
 .pos-shell .printer-profile-sidebar,
 .pos-shell .printer-profile-editor,
 .pos-shell .printer-profile-list button,
+.pos-shell .printer-summary-card,
+.pos-shell .printer-add-hero,
+.pos-shell .printer-route-summary,
+.pos-shell .route-chip-summary div,
+.pos-shell .route-empty-state,
+.pos-shell .route-check-card,
 .pos-shell .profile-status-card,
 .pos-shell .part-method-buttons button,
 .pos-shell .part-auto-amount,
@@ -3304,8 +3986,36 @@ button {
 .pos-shell .orders-total-summary strong,
 .pos-shell .orders-select-toolbar strong,
 .pos-shell .orders-select-toolbar label,
-.pos-shell .order-select-cell {
+.pos-shell .order-select-cell,
+.pos-shell .staff-code-preview strong,
+.pos-shell .staff-picker-title strong,
+.pos-shell .staff-picker-row strong,
+.pos-shell .configuration-option strong,
+.pos-shell .configuration-summary strong {
   color: var(--text);
+}
+
+.pos-shell .staff-code-preview span,
+.pos-shell .staff-picker-title span,
+.pos-shell .configuration-option span,
+.pos-shell .configuration-summary span {
+  color: var(--text-muted);
+}
+
+.pos-shell .staff-picker-row span {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.pos-shell .staff-picker-row:hover,
+.pos-shell .staff-picker-row.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.pos-shell .printer-manage-view .printer-panel,
+.pos-shell .printer-profile-editor .panel-actions {
+  background: var(--surface);
 }
 
 .pos-shell .saved-order:has(.order-select-cell input:checked) {
@@ -6502,6 +7212,19 @@ button {
   overflow: hidden;
 }
 
+.pos-shell .item-photo-preview.clickable {
+  cursor: pointer;
+}
+
+.pos-shell .item-photo-preview.clickable:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.pos-shell .item-photo-preview:disabled {
+  cursor: default;
+}
+
 .pos-shell .item-photo-preview img,
 .pos-shell .item-row-thumb img {
   width: 100%;
@@ -6527,6 +7250,37 @@ button {
   inset: 0;
   opacity: 0;
   cursor: pointer;
+}
+
+.pos-shell .image-generate-status {
+  padding: 8px 10px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.pos-shell .item-image-preview-panel {
+  width: min(620px, calc(100vw - 32px));
+}
+
+.pos-shell .item-image-preview-large {
+  min-height: 320px;
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.pos-shell .item-image-preview-large img {
+  width: 100%;
+  max-height: 460px;
+  object-fit: contain;
+  border-radius: 8px;
 }
 
 .pos-shell .item-editor-row .row-main {

@@ -55,7 +55,22 @@ type PaymentMethod = 'Cash' | 'UPI' | 'Card' | 'Due' | 'Part'
 type PartTenderMethod = 'upi' | 'card'
 type ThemeMode = 'light' | 'dark'
 type AppMode = 'cloud' | 'offline'
-type AppView = 'home' | 'pos' | 'reports' | 'expenses' | 'profile' | 'sync' | 'users' | 'network' | 'about'
+type AppView =
+  | 'home'
+  | 'pos'
+  | 'reports'
+  | 'expenses'
+  | 'profile'
+  | 'sync'
+  | 'users'
+  | 'network'
+  | 'about'
+  | 'menu'
+  | 'printers'
+  | 'printer_config'
+  | 'service_staff'
+  | 'settings'
+  | 'configuration'
 type ReportPeriodMode = 'custom' | 'monthly' | 'yearly'
 type DiscountMode = 'percent' | 'amount'
 type StaffPermission =
@@ -129,6 +144,7 @@ type CartLine = {
   id: string
   itemId: string
   name: string
+  category?: string
   price: number
   qty: number
   taxRate: number
@@ -182,6 +198,9 @@ type SavedOrder = {
   diningGroupName: string
   customerId?: string
   customer: string
+  serviceStaffId?: string
+  serviceStaffName?: string
+  serviceStaffCode?: string
   cart: CartLine[]
   discountMode: DiscountMode
   discountPercent: number
@@ -193,6 +212,15 @@ type SavedOrder = {
   totals: OrderTotals
   taxExempt?: boolean
   creditApplied?: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+type ServiceStaff = {
+  id: string
+  name: string
+  code: string
+  active: boolean
   createdAt: string
   updatedAt: string
 }
@@ -264,6 +292,10 @@ type MenuDisplaySettings = {
   sidePanelWidth: number
 }
 
+type AppConfiguration = {
+  showServiceStaffSelector: boolean
+}
+
 type MenuGridStyle = CSSProperties & {
   '--menu-item-width': string
   '--menu-item-height': string
@@ -275,6 +307,8 @@ type PrinterProfile = {
   id: string
   name: string
   settings: ReceiptPrinterSettings
+  categoryIds: string[]
+  tableGroupIds: string[]
   createdAt: string
   updatedAt: string
 }
@@ -618,6 +652,8 @@ const companyName = 'GI Hostings'
 const companyWebsite = 'https://www.gihostings.com'
 const staffDirectorySyncKey = 'pos-staff-user-directory'
 const staffPinResetCommandKey = 'pos-staff-pin-reset-commands'
+const serviceStaffStorageKey = 'pos-service-staff'
+const appConfigurationStorageKey = 'pos-app-configuration'
 const openingCashStorageKey = 'pos-opening-cash-balances'
 const appModeStorageKey = 'pos-app-mode'
 const offlineLicenseStorageKey = 'pos-offline-license'
@@ -628,6 +664,8 @@ const restaurantDataStorageKeys = [
   'pos-dining-table-groups',
   'pos-customers',
   'pos-menu-items',
+  serviceStaffStorageKey,
+  appConfigurationStorageKey,
   openingCashStorageKey,
   'pos-expenses',
   'pos-qr-orders',
@@ -715,6 +753,10 @@ const defaultMenuDisplaySettings: MenuDisplaySettings = {
   sidePanelWidth: 86,
 }
 
+const defaultAppConfiguration: AppConfiguration = {
+  showServiceStaffSelector: true,
+}
+
 const menuDisplayLimits: Record<keyof MenuDisplaySettings, { min: number; max: number }> = {
   fontSize: { min: 10, max: 18 },
   itemWidth: { min: 90, max: 220 },
@@ -754,6 +796,9 @@ function App() {
     normalizeExpenses(loadStoredArray<ExpenseEntry>('pos-expenses', [])),
   )
   const [customers, setCustomers] = useState<CustomerProfile[]>(() => loadStoredArray('pos-customers', []))
+  const [serviceStaff, setServiceStaff] = useState<ServiceStaff[]>(() =>
+    normalizeServiceStaff(loadStoredArray<ServiceStaff>(serviceStaffStorageKey, [])),
+  )
   const [activeView, setActiveView] = useState<AppView>('home')
   const [businessProfile, setBusinessProfile] = useState<BusinessProfile>(() =>
     normalizeBusinessProfile(loadStoredObject('pos-business-profile', defaultBusinessProfile)),
@@ -771,6 +816,9 @@ function App() {
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>(() => loadStoredArray('pos-audit-log', []))
   const [menuDisplaySettings, setMenuDisplaySettings] = useState<MenuDisplaySettings>(() =>
     normalizeMenuDisplaySettings(loadStoredObject('pos-menu-display-settings', defaultMenuDisplaySettings)),
+  )
+  const [appConfiguration, setAppConfiguration] = useState<AppConfiguration>(() =>
+    normalizeAppConfiguration(loadStoredObject(appConfigurationStorageKey, defaultAppConfiguration)),
   )
   const [currentDate, setCurrentDate] = useState(() => new Date())
   const [activeOrderId, setActiveOrderId] = useState(() => createOrderId())
@@ -792,6 +840,9 @@ function App() {
   const [customerSort, setCustomerSort] = useState<CustomerSort>('recent')
   const [customerPhone, setCustomerPhone] = useState('')
   const [customerAddress, setCustomerAddress] = useState('')
+  const [selectedServiceStaffId, setSelectedServiceStaffId] = useState('')
+  const [selectedServiceStaffName, setSelectedServiceStaffName] = useState('')
+  const [selectedServiceStaffCode, setSelectedServiceStaffCode] = useState('')
   const [discountMode, setDiscountMode] = useState<DiscountMode>('percent')
   const [discountPercent, setDiscountPercent] = useState(0)
   const [discountAmount, setDiscountAmount] = useState(0)
@@ -800,11 +851,14 @@ function App() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash')
   const [amountReceivedOverride, setAmountReceivedOverride] = useState<number | null>(null)
   const [partTenderMethod, setPartTenderMethod] = useState<PartTenderMethod>('upi')
-  const [printerOpen, setPrinterOpen] = useState(false)
+  const [, setPrinterOpen] = useState(false)
   const [kotPrintOpen, setKotPrintOpen] = useState(false)
-  const [menuEditorOpen, setMenuEditorOpen] = useState(false)
+  const [, setMenuEditorOpen] = useState(false)
   const [displaySettingsOpen, setDisplaySettingsOpen] = useState(false)
   const [tableSelectorOpen, setTableSelectorOpen] = useState(false)
+  const [staffCodePromptOpen, setStaffCodePromptOpen] = useState(false)
+  const [staffCodeInput, setStaffCodeInput] = useState('')
+  const [staffCodeStatus, setStaffCodeStatus] = useState('')
   const [tableSetupOpen, setTableSetupOpen] = useState(false)
   const [qrOrdersOpen, setQrOrdersOpen] = useState(false)
   const [tableQrPreview, setTableQrPreview] = useState<TableQrPreview | null>(null)
@@ -873,6 +927,9 @@ function App() {
     () => localStorage.getItem('bill-printer-profile-id') || defaultBillPrinterProfileId,
   )
   const [printerProfileName, setPrinterProfileName] = useState('')
+  const [printerProfileDeviceName, setPrinterProfileDeviceName] = useState('')
+  const [printerRouteCategoryId, setPrinterRouteCategoryId] = useState('')
+  const [pendingNewPrinterId, setPendingNewPrinterId] = useState('')
   const [storageReady, setStorageReady] = useState(() => !hasDesktopDataStore())
   const [localDatabasePath, setLocalDatabasePath] = useState('')
   const [localDatabaseDataDir, setLocalDatabaseDataDir] = useState('')
@@ -1014,6 +1071,14 @@ function App() {
   const [staffEditorPermissions, setStaffEditorPermissions] = useState<StaffPermission[]>(defaultCashierPermissions)
   const [staffEditorActive, setStaffEditorActive] = useState(true)
   const [staffEditorStatus, setStaffEditorStatus] = useState('')
+  const [serviceStaffEditorId, setServiceStaffEditorId] = useState<string | null>(null)
+  const [serviceStaffNameDraft, setServiceStaffNameDraft] = useState('')
+  const [serviceStaffCodeDraft, setServiceStaffCodeDraft] = useState('')
+  const [serviceStaffStatus, setServiceStaffStatus] = useState('Ready')
+  const [generatedImageVariant, setGeneratedImageVariant] = useState(0)
+  const [itemImageStatus, setItemImageStatus] = useState('')
+  const [itemImagePreviewOpen, setItemImagePreviewOpen] = useState(false)
+  const [itemImageSearching, setItemImageSearching] = useState(false)
 
   const filteredItems = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -1225,6 +1290,18 @@ function App() {
     [cart, lineEditor],
   )
   const activeStaffUsers = useMemo(() => staffUsers.filter((staffUser) => staffUser.active), [staffUsers])
+  const activeServiceStaff = useMemo(
+    () => serviceStaff.filter((staffMember) => staffMember.active !== false),
+    [serviceStaff],
+  )
+  const selectedServiceStaff = useMemo(
+    () => activeServiceStaff.find((staffMember) => staffMember.id === selectedServiceStaffId) ?? null,
+    [activeServiceStaff, selectedServiceStaffId],
+  )
+  const staffCodePreviewStaff = useMemo(() => {
+    const code = normalizeStaffCode(staffCodeInput)
+    return code ? (activeServiceStaff.find((staffMember) => normalizeStaffCode(staffMember.code) === code) ?? null) : null
+  }, [activeServiceStaff, staffCodeInput])
   const selectedSetupRestaurant = useMemo(
     () => setupRestaurants.find((restaurant) => restaurant.id === setupRestaurantId) ?? null,
     [setupRestaurantId, setupRestaurants],
@@ -1297,6 +1374,14 @@ function App() {
   )
   const billPrinterSettings = billPrinterProfile?.settings ?? defaultPrinterSettings
   const activePrinterSettings = activePrinterProfile?.settings ?? defaultPrinterSettings
+  const activePrinterCategoryLabels = useMemo(
+    () => getPrinterCategoryLabels(activePrinterProfile, categoryList),
+    [activePrinterProfile, categoryList],
+  )
+  const activePrinterTableGroupLabels = useMemo(
+    () => getPrinterTableGroupLabels(activePrinterProfile, diningTableGroups),
+    [activePrinterProfile, diningTableGroups],
+  )
 
   const menuGridStyle = useMemo<MenuGridStyle>(
     () => ({
@@ -1446,6 +1531,9 @@ function App() {
           'pos-customers',
           loadStoredArray('pos-customers', []),
         )
+        const loadedServiceStaff = normalizeServiceStaff(
+          readDbValue(snapshot, serviceStaffStorageKey, loadStoredArray<ServiceStaff>(serviceStaffStorageKey, [])),
+        )
         const loadedBusinessProfile = normalizeBusinessProfile(
           readDbValue(snapshot, 'pos-business-profile', loadStoredObject('pos-business-profile', defaultBusinessProfile)),
         )
@@ -1477,6 +1565,13 @@ function App() {
             loadStoredObject('pos-menu-display-settings', defaultMenuDisplaySettings),
           ),
         )
+        const loadedAppConfiguration = normalizeAppConfiguration(
+          readDbValue(
+            snapshot,
+            appConfigurationStorageKey,
+            loadStoredObject(appConfigurationStorageKey, defaultAppConfiguration),
+          ),
+        )
         const loadedPrinterProfiles = normalizePrinterProfiles(
           readDbValue(snapshot, 'printer-profiles', loadInitialPrinterProfiles()),
         )
@@ -1501,6 +1596,7 @@ function App() {
         setExpenses(loadedExpenses)
         setOpeningCashBalances(loadedOpeningCashBalances)
         setCustomers(loadedCustomers)
+        setServiceStaff(loadedServiceStaff)
         businessProfileRef.current = loadedBusinessProfile
         setBusinessProfile(loadedBusinessProfile)
         setCloudSyncSettings(loadedCloudSyncSettings)
@@ -1509,6 +1605,7 @@ function App() {
         setStaffUsers(loadedStaffUsers)
         setAuditLog(loadedAuditLog)
         setMenuDisplaySettings(loadedMenuDisplaySettings)
+        setAppConfiguration(loadedAppConfiguration)
         setPrinterProfiles(loadedPrinterProfiles)
         setBillPrinterProfileId(loadedBillPrinterProfileId)
         setActivePrinterProfileId(loadedActivePrinterProfileId)
@@ -1603,6 +1700,10 @@ function App() {
   }, [customers, storageReady])
 
   useEffect(() => {
+    persistStoredValue(serviceStaffStorageKey, serviceStaff, storageReady && !skipPersistenceRef.current)
+  }, [serviceStaff, storageReady])
+
+  useEffect(() => {
     persistStoredValue('pos-business-profile', businessProfile, storageReady && !skipPersistenceRef.current)
   }, [businessProfile, storageReady])
 
@@ -1643,6 +1744,10 @@ function App() {
   useEffect(() => {
     persistStoredValue('pos-menu-display-settings', menuDisplaySettings, storageReady && !skipPersistenceRef.current)
   }, [menuDisplaySettings, storageReady])
+
+  useEffect(() => {
+    persistStoredValue(appConfigurationStorageKey, appConfiguration, storageReady && !skipPersistenceRef.current)
+  }, [appConfiguration, storageReady])
 
   useEffect(() => {
     if (!storageReady || !currentUser || !window.posDb) {
@@ -1945,6 +2050,12 @@ function App() {
     if (view === 'profile') return 'business_profile'
     if (view === 'sync') return 'cloud_sync'
     if (view === 'users') return 'user_manage'
+    if (view === 'service_staff') return 'user_manage'
+    if (view === 'menu') return 'menu_manage'
+    if (view === 'printers') return 'printer_manage'
+    if (view === 'printer_config') return 'printer_manage'
+    if (view === 'settings') return 'user_manage'
+    if (view === 'configuration') return 'user_manage'
     if (view === 'network') return 'cloud_sync'
     return null
   }
@@ -1969,6 +2080,12 @@ function App() {
     if (view === 'profile') return hasPermission('business_profile')
     if (view === 'sync') return hasCloudFeatureAccess && hasPermission('cloud_sync')
     if (view === 'users') return hasPermission('user_manage')
+    if (view === 'service_staff') return hasPermission('user_manage')
+    if (view === 'menu') return hasPermission('menu_manage')
+    if (view === 'printers') return hasPermission('printer_manage')
+    if (view === 'printer_config') return hasPermission('printer_manage')
+    if (view === 'settings') return hasPermission('user_manage')
+    if (view === 'configuration') return hasPermission('user_manage')
     if (view === 'network') return hasPermission('cloud_sync') && hasGoldLocalPlan
 
     return false
@@ -2640,6 +2757,105 @@ function App() {
     recordAudit(existing ? 'user_updated' : 'user_created', `${name} permissions saved`)
   }
 
+  function startNewServiceStaff() {
+    if (!requirePermission('user_manage')) {
+      return
+    }
+
+    setServiceStaffEditorId(null)
+    setServiceStaffNameDraft('')
+    setServiceStaffCodeDraft('')
+    setServiceStaffStatus('Ready')
+  }
+
+  function editServiceStaff(staffMember: ServiceStaff) {
+    if (!requirePermission('user_manage')) {
+      return
+    }
+
+    setServiceStaffEditorId(staffMember.id)
+    setServiceStaffNameDraft(staffMember.name)
+    setServiceStaffCodeDraft(staffMember.code)
+    setServiceStaffStatus('Editing staff')
+  }
+
+  function saveServiceStaff() {
+    if (!requirePermission('user_manage')) {
+      return
+    }
+
+    const name = serviceStaffNameDraft.trim()
+    const code = normalizeStaffCode(serviceStaffCodeDraft)
+    const existing = serviceStaffEditorId
+      ? serviceStaff.find((staffMember) => staffMember.id === serviceStaffEditorId)
+      : undefined
+
+    if (!name) {
+      setServiceStaffStatus('Staff name required')
+      return
+    }
+
+    if (!code) {
+      setServiceStaffStatus('Staff code required')
+      return
+    }
+
+    const duplicate = serviceStaff.find(
+      (staffMember) => staffMember.id !== existing?.id && normalizeStaffCode(staffMember.code) === code,
+    )
+    if (duplicate) {
+      setServiceStaffStatus(`Code already used by ${duplicate.name}`)
+      return
+    }
+
+    const now = new Date().toISOString()
+    const nextStaff: ServiceStaff = {
+      id: existing?.id ?? createServiceStaffId(),
+      name,
+      code,
+      active: true,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+
+    setServiceStaff((staffList) =>
+      existing
+        ? staffList.map((staffMember) => (staffMember.id === existing.id ? nextStaff : staffMember))
+        : [nextStaff, ...staffList],
+    )
+    setServiceStaffEditorId(nextStaff.id)
+    setServiceStaffNameDraft(nextStaff.name)
+    setServiceStaffCodeDraft(nextStaff.code)
+    setServiceStaffStatus(`${nextStaff.name} saved`)
+    recordAudit(existing ? 'service_staff_updated' : 'service_staff_created', `${nextStaff.name} / ${nextStaff.code}`)
+  }
+
+  function deleteServiceStaff(staffMember: ServiceStaff) {
+    if (!requirePermission('user_manage')) {
+      return
+    }
+
+    if (!window.confirm(`Delete staff ${staffMember.name}? Existing bills will keep the saved staff name.`)) {
+      return
+    }
+
+    setServiceStaff((staffList) => staffList.filter((savedStaff) => savedStaff.id !== staffMember.id))
+    if (serviceStaffEditorId === staffMember.id) {
+      startNewServiceStaff()
+    }
+    if (selectedServiceStaffId === staffMember.id) {
+      clearSelectedServiceStaff()
+    }
+    setServiceStaffStatus(`${staffMember.name} deleted`)
+    recordAudit('service_staff_deleted', `${staffMember.name} removed`)
+  }
+
+  function clearSelectedServiceStaff() {
+    setSelectedServiceStaffId('')
+    setSelectedServiceStaffName('')
+    setSelectedServiceStaffCode('')
+  }
+
   function updateBusinessProfile<K extends keyof BusinessProfile>(field: K, value: BusinessProfile[K]) {
     if (!requirePermission('business_profile')) {
       return
@@ -2742,6 +2958,8 @@ function App() {
       setExpenses([])
       setOpeningCashBalances({})
       setCustomers([])
+      setServiceStaff([])
+      setAppConfiguration(defaultAppConfiguration)
       setBusinessProfile(defaultBusinessProfile)
       setCloudSyncSettings(nextSettings)
       setAppMode('cloud')
@@ -2851,6 +3069,7 @@ function App() {
     setMenuEditorOpen(false)
     setDisplaySettingsOpen(false)
     setTableSelectorOpen(false)
+    setStaffCodePromptOpen(false)
     setTableSetupOpen(false)
     setQrOrdersOpen(false)
     setTableQrPreview(null)
@@ -3387,6 +3606,9 @@ function App() {
         case 'pos-customers':
           setCustomers(Array.isArray(change.value) ? (change.value as CustomerProfile[]) : [])
           break
+        case serviceStaffStorageKey:
+          setServiceStaff(normalizeServiceStaff(Array.isArray(change.value) ? (change.value as ServiceStaff[]) : []))
+          break
         case 'pos-menu-items':
           setMenuList(normalizeMenuItems(Array.isArray(change.value) ? (change.value as MenuItem[]) : defaultMenuItems))
           break
@@ -3466,7 +3688,8 @@ function App() {
       return
     }
 
-    setMenuEditorOpen(true)
+    setMenuEditorOpen(false)
+    setActiveView('menu')
     setItemDraft((draft) => ({
       ...draft,
       category: activeCategory === 'all' ? (editableCategories[0]?.id ?? 'all') : activeCategory,
@@ -3489,7 +3712,8 @@ function App() {
       return
     }
 
-    setPrinterOpen(true)
+    setPrinterOpen(false)
+    setActiveView('printers')
     refreshPrinters()
   }
 
@@ -3771,8 +3995,57 @@ function App() {
     try {
       const imageDataUrl = await resizeImageFile(file)
       setItemDraft((draft) => ({ ...draft, imageDataUrl }))
+      setItemImageStatus('Uploaded image ready')
     } catch {
       setPrinterStatus('Could not load item photo')
+    }
+  }
+
+  async function generateItemImage() {
+    if (!requirePermission('menu_manage', 'Menu setup permission required')) {
+      return
+    }
+
+    if (itemImageSearching) {
+      return
+    }
+
+    const name = itemDraft.name.trim()
+    if (!name) {
+      setItemImageStatus('Enter item name before generating image')
+      return
+    }
+
+    const nextVariant = generatedImageVariant + 1
+    const categoryLabel = editableCategories.find((category) => category.id === itemDraft.category)?.label || itemDraft.category
+    const tags = normalizeTags(itemDraft.tags)
+    setGeneratedImageVariant(nextVariant)
+    setItemImageSearching(true)
+    setItemImageStatus(`Fetching Pinterest image for ${name}...`)
+
+    try {
+      const result = await window.posImages?.searchFoodImage({
+        name,
+        category: categoryLabel,
+        tags,
+        variant: nextVariant,
+      })
+
+      if (result?.ok && result.dataUrl) {
+        setItemDraft((draft) => ({ ...draft, imageDataUrl: result.dataUrl || '' }))
+        setItemImageStatus(result.title ? `Pinterest image: ${result.title}` : `Pinterest image ready for ${name}`)
+        return
+      }
+
+      setItemImageStatus(
+        result?.error
+          ? `${result.error}. No image attached. Try a clearer food name or upload manually.`
+          : 'No exact food image found. No image attached.',
+      )
+    } catch (error) {
+      setItemImageStatus(`${getErrorMessage(error)}. No image attached.`)
+    } finally {
+      setItemImageSearching(false)
     }
   }
 
@@ -3841,6 +4114,7 @@ function App() {
           id: `line-${item.id}-${Date.now()}`,
           itemId: item.id,
           name: item.name,
+          category: item.category,
           price: itemPrice,
           qty: 1,
           taxRate: typeof item.taxRate === 'number' ? item.taxRate : (businessProfile.defaultGstRate ?? 0),
@@ -3954,6 +4228,10 @@ function App() {
       return
     }
 
+    if (hasCurrentItems && !ensureServiceStaffSelected()) {
+      return
+    }
+
     if (hasCurrentItems && activeSavedOrder?.status !== 'paid') {
       saveCurrentOrder('unclosed')
       setPrinterStatus('Current bill moved to Unclosed')
@@ -3975,6 +4253,7 @@ function App() {
     setCustomer('')
     setCustomerPhone('')
     setCustomerAddress('')
+    clearSelectedServiceStaff()
     setTable('')
     setSeatingMode('individual')
     setSelectedTables([])
@@ -4004,6 +4283,8 @@ function App() {
     const savedCustomerName = creditCustomer?.name ?? customer
     const savedTables = getCurrentDiningTables(seatingMode, table, selectedTables)
     const savedTableLabel = getSeatingDisplayLabel(seatingMode, table, savedTables, diningGroupName)
+    const shouldUseServiceStaff = appConfiguration.showServiceStaffSelector
+    const savedServiceStaff = shouldUseServiceStaff ? (selectedServiceStaff ?? null) : null
 
     return {
       id: activeOrderId,
@@ -4016,6 +4297,9 @@ function App() {
       diningGroupName: seatingMode === 'group' ? diningGroupName.trim() : '',
       customerId: savedCustomerId || undefined,
       customer: savedCustomerName,
+      serviceStaffId: shouldUseServiceStaff ? savedServiceStaff?.id || selectedServiceStaffId || undefined : undefined,
+      serviceStaffName: shouldUseServiceStaff ? savedServiceStaff?.name || selectedServiceStaffName || '' : '',
+      serviceStaffCode: shouldUseServiceStaff ? savedServiceStaff?.code || selectedServiceStaffCode || '' : '',
       cart: cart.map((line) => ({ ...line })),
       discountMode,
       discountPercent,
@@ -4089,6 +4373,10 @@ function App() {
       return
     }
 
+    if (!ensureServiceStaffSelected()) {
+      return
+    }
+
     const creditCustomer = ensureCreditCustomer()
     if (!creditCustomer) {
       return
@@ -4113,6 +4401,10 @@ function App() {
       return
     }
 
+    if (!ensureServiceStaffSelected()) {
+      return
+    }
+
     if (activeSavedOrder?.status === 'paid') {
       setPrinterStatus('Paid bill cannot be moved to Hold')
       return
@@ -4133,6 +4425,13 @@ function App() {
     setDiningGroupName(order.diningGroupName ?? '')
     setSelectedCustomerId(order.customerId ?? '')
     setCustomer(order.customer)
+    if (appConfiguration.showServiceStaffSelector) {
+      setSelectedServiceStaffId(order.serviceStaffId ?? '')
+      setSelectedServiceStaffName(order.serviceStaffName ?? '')
+      setSelectedServiceStaffCode(order.serviceStaffCode ?? '')
+    } else {
+      clearSelectedServiceStaff()
+    }
     setActiveTableGroupId(getTableGroupId(getSavedOrderTables(order)[0] ?? order.table, diningTableGroups))
     const savedCustomer = customers.find((profile) => profile.id === order.customerId)
     setCustomerPhone(savedCustomer?.phone ?? '')
@@ -4207,6 +4506,11 @@ function App() {
     setDiningGroupName('')
     setActiveTableGroupId(getTableGroupId(tableNo, diningTableGroups))
     setTableSelectorOpen(false)
+    if (appConfiguration.showServiceStaffSelector) {
+      openStaffCodePrompt()
+    } else {
+      clearSelectedServiceStaff()
+    }
     setPrinterStatus(`${tableNo} selected`)
   }
 
@@ -4235,7 +4539,44 @@ function App() {
     setSelectedTables(sortedTables)
     setTable(label)
     setTableSelectorOpen(false)
+    if (appConfiguration.showServiceStaffSelector) {
+      openStaffCodePrompt()
+    } else {
+      clearSelectedServiceStaff()
+    }
     setPrinterStatus(`${label} selected`)
+  }
+
+  function openStaffCodePrompt() {
+    setStaffCodeInput('')
+    setStaffCodeStatus(activeServiceStaff.length ? 'Enter staff code for this table' : 'Add service staff before billing')
+    setStaffCodePromptOpen(true)
+  }
+
+  function selectServiceStaffForBill(staffMember: ServiceStaff) {
+    setSelectedServiceStaffId(staffMember.id)
+    setSelectedServiceStaffName(staffMember.name)
+    setSelectedServiceStaffCode(staffMember.code)
+    setStaffCodeInput(staffMember.code)
+    setStaffCodePromptOpen(false)
+    setStaffCodeStatus('')
+    setPrinterStatus(`${staffMember.name} selected`)
+  }
+
+  function applyStaffCode() {
+    const code = normalizeStaffCode(staffCodeInput)
+    if (!code) {
+      setStaffCodeStatus('Enter staff code')
+      return
+    }
+
+    const matchedStaff = activeServiceStaff.find((staffMember) => normalizeStaffCode(staffMember.code) === code)
+    if (!matchedStaff) {
+      setStaffCodeStatus('Staff code not found')
+      return
+    }
+
+    selectServiceStaffForBill(matchedStaff)
   }
 
   function ensureTableSelected() {
@@ -4252,6 +4593,24 @@ function App() {
     }
 
     return true
+  }
+
+  function ensureServiceStaffSelected() {
+    if (!appConfiguration.showServiceStaffSelector) {
+      return true
+    }
+
+    if (orderType !== 'Dining') {
+      return true
+    }
+
+    if (selectedServiceStaffName.trim()) {
+      return true
+    }
+
+    openStaffCodePrompt()
+    setPrinterStatus('Enter service staff code before continuing')
+    return false
   }
 
   function ensureCreditCustomer() {
@@ -4278,6 +4637,7 @@ function App() {
     setSuccessOrder(order)
     setSuccessAction(action)
     setTableSelectorOpen(false)
+    setStaffCodePromptOpen(false)
     setCustomerEditorOpen(false)
     setDiscountEditorOpen(false)
     setLineActionId(null)
@@ -4547,6 +4907,8 @@ function App() {
 
   function editMenuItem(item: MenuItem) {
     setEditingItemId(item.id)
+    setGeneratedImageVariant(0)
+    setItemImageStatus(item.imageDataUrl ? 'Current item image loaded' : '')
     setItemDraft({
       name: item.name,
       category: item.category,
@@ -4573,6 +4935,9 @@ function App() {
 
   function resetItemDraft(category = itemDraft.category) {
     setEditingItemId(null)
+    setGeneratedImageVariant(0)
+    setItemImageStatus('')
+    setItemImagePreviewOpen(false)
     setItemDraft({
       name: '',
       category,
@@ -4715,6 +5080,24 @@ function App() {
     )
   }
 
+  function updatePrinterProfileRoutes(
+    profileId: string,
+    next: Partial<Pick<PrinterProfile, 'categoryIds' | 'tableGroupIds'>>,
+  ) {
+    setPrinterProfiles((profiles) =>
+      profiles.map((profile) =>
+        profile.id === profileId
+          ? {
+              ...profile,
+              categoryIds: next.categoryIds ? uniqueStrings(next.categoryIds) : profile.categoryIds,
+              tableGroupIds: next.tableGroupIds ? uniqueStrings(next.tableGroupIds) : profile.tableGroupIds,
+              updatedAt: new Date().toISOString(),
+            }
+          : profile,
+      ),
+    )
+  }
+
   function updateActivePrinterProfileSettings(next: Partial<ReceiptPrinterSettings>) {
     if (!activePrinterProfile) {
       return
@@ -4735,30 +5118,155 @@ function App() {
     )
   }
 
-  function addPrinterProfile() {
-    const name = printerProfileName.trim()
-    if (!name) {
-      setPrinterStatus('Enter printer profile name')
+  function toggleActivePrinterCategory(categoryId: string) {
+    if (!activePrinterProfile) {
       return
     }
 
-    const now = new Date().toISOString()
-    const defaultPrinter = printers.find((printer) => printer.isDefault)
+    const nextCategoryIds = activePrinterProfile.categoryIds.includes(categoryId)
+      ? activePrinterProfile.categoryIds.filter((id) => id !== categoryId)
+      : [...activePrinterProfile.categoryIds, categoryId]
+
+    updatePrinterProfileRoutes(activePrinterProfile.id, { categoryIds: nextCategoryIds })
+  }
+
+  function addActivePrinterCategoryRoute() {
+    if (!activePrinterProfile) {
+      return
+    }
+
+    const categoryId =
+      printerRouteCategoryId ||
+      editableCategories.find((category) => !activePrinterProfile.categoryIds.includes(category.id))?.id ||
+      ''
+
+    if (!categoryId) {
+      setPrinterStatus('No category available to add')
+      return
+    }
+
+    if (activePrinterProfile.categoryIds.includes(categoryId)) {
+      setPrinterStatus(`${getCategoryDisplayLabel(categoryId, categoryList)} already added`)
+      return
+    }
+
+    updatePrinterProfileRoutes(activePrinterProfile.id, {
+      categoryIds: [...activePrinterProfile.categoryIds, categoryId],
+    })
+    setPrinterRouteCategoryId('')
+    setPrinterStatus(`${getCategoryDisplayLabel(categoryId, categoryList)} routed to ${activePrinterProfile.name}`)
+  }
+
+  function toggleActivePrinterTableGroup(groupId: string) {
+    if (!activePrinterProfile) {
+      return
+    }
+
+    const nextTableGroupIds = activePrinterProfile.tableGroupIds.includes(groupId)
+      ? activePrinterProfile.tableGroupIds.filter((id) => id !== groupId)
+      : [...activePrinterProfile.tableGroupIds, groupId]
+
+    updatePrinterProfileRoutes(activePrinterProfile.id, { tableGroupIds: nextTableGroupIds })
+  }
+
+  function addPrinterProfile() {
+    const name = printerProfileName.trim()
+    if (!name) {
+      setPrinterStatus('Enter printer name')
+      return
+    }
+
+    if (!printerProfileDeviceName) {
+      setPrinterStatus('Select installed printer')
+      return
+    }
+
     const profile: PrinterProfile = {
       id: createPrinterProfileId(),
       name,
       settings: normalizePrinterSettings({
         ...defaultPrinterSettings,
-        deviceName: defaultPrinter?.name ?? '',
+        deviceName: printerProfileDeviceName,
       }),
-      createdAt: now,
-      updatedAt: now,
+      categoryIds: [],
+      tableGroupIds: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     }
 
     setPrinterProfiles((profiles) => [...profiles, profile])
     setActivePrinterProfileId(profile.id)
     setPrinterProfileName('')
-    setPrinterStatus(`${profile.name} printer profile added`)
+    setPrinterProfileDeviceName('')
+    setPrinterStatus(`${profile.name} added. Configure KOT categories next.`)
+    setActiveView('printer_config')
+  }
+
+  function openNewPrinterConfiguration() {
+    const defaultPrinter = printers.find((printer) => printer.isDefault) ?? printers[0]
+    const profileName = `Printer ${printerProfiles.length + 1}`
+    const profile: PrinterProfile = {
+      id: createPrinterProfileId(),
+      name: profileName,
+      settings: normalizePrinterSettings({
+        ...defaultPrinterSettings,
+        deviceName: defaultPrinter?.name ?? '',
+      }),
+      categoryIds: [],
+      tableGroupIds: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+
+    setPrinterProfiles((profiles) => [...profiles, profile])
+    setActivePrinterProfileId(profile.id)
+    setPendingNewPrinterId(profile.id)
+    setPrinterRouteCategoryId('')
+    setPrinterStatus('Configure printer details and press Save Printer')
+    setActiveView('printer_config')
+  }
+
+  function closePrinterConfiguration() {
+    if (pendingNewPrinterId) {
+      setPrinterProfiles((profiles) => profiles.filter((profile) => profile.id !== pendingNewPrinterId))
+      setActivePrinterProfileId(billPrinterProfile?.id ?? defaultBillPrinterProfileId)
+      setPendingNewPrinterId('')
+      setPrinterStatus('New printer setup cancelled')
+    }
+
+    setActiveView('printers')
+  }
+
+  function saveActivePrinterProfile() {
+    if (!activePrinterProfile) {
+      setPrinterStatus('Select printer profile')
+      return
+    }
+
+    const name = activePrinterProfile.name.trim()
+    if (!name) {
+      setPrinterStatus('Enter printer name')
+      return
+    }
+
+    if (activePrinterSettings.mode === 'system' && !activePrinterSettings.deviceName) {
+      setPrinterStatus('Select installed printer')
+      return
+    }
+
+    if (activePrinterSettings.mode === 'network' && !activePrinterSettings.ipAddress.trim()) {
+      setPrinterStatus('Enter LAN printer IP address')
+      return
+    }
+
+    setPrinterProfiles((profiles) =>
+      profiles.map((profile) =>
+        profile.id === activePrinterProfile.id ? { ...profile, name, updatedAt: new Date().toISOString() } : profile,
+      ),
+    )
+    setPendingNewPrinterId('')
+    setPrinterStatus(`${name} printer saved`)
+    setActiveView('printers')
   }
 
   function deleteActivePrinterProfile() {
@@ -4769,6 +5277,9 @@ function App() {
 
     setPrinterProfiles((profiles) => profiles.filter((profile) => profile.id !== activePrinterProfile.id))
     setActivePrinterProfileId(billPrinterProfile?.id ?? defaultBillPrinterProfileId)
+    if (pendingNewPrinterId === activePrinterProfile.id) {
+      setPendingNewPrinterId('')
+    }
     setPrinterStatus(`${activePrinterProfile.name} printer profile deleted`)
   }
 
@@ -4781,6 +5292,10 @@ function App() {
         }
 
         if (!ensureTableSelected()) {
+          return
+        }
+
+        if (!ensureServiceStaffSelected()) {
           return
         }
 
@@ -4807,6 +5322,10 @@ function App() {
     }
 
     if (!ensureTableSelected()) {
+      return
+    }
+
+    if (!ensureServiceStaffSelected()) {
       return
     }
 
@@ -4849,13 +5368,49 @@ function App() {
     }
   }
 
-  async function printKot(profileId: string) {
+  async function printKot(profileId: string, kotItems = cart) {
     const profile = printerProfiles.find((savedProfile) => savedProfile.id === profileId)
     if (!profile) {
       setPrinterStatus('Select printer profile')
       return
     }
 
+    if (!window.posPrinter) {
+      setPrinterStatus('Run inside desktop app for KOT printer')
+      return
+    }
+
+    if (!kotItems.length) {
+      setPrinterStatus('Add items before printing KOT')
+      return
+    }
+
+    if (!ensureTableSelected()) {
+      return
+    }
+
+    if (!ensureServiceStaffSelected()) {
+      return
+    }
+
+    if (activeSavedOrder?.status !== 'paid') {
+      saveCurrentOrder('unclosed')
+    }
+
+    setPrinterStatus(`Printing ${profile.name} KOT...`)
+    try {
+      await window.posPrinter.printKot({
+        settings: profile.settings,
+        kot: buildKotOrder(profile.name, kotItems),
+      })
+      setKotPrintOpen(false)
+      setPrinterStatus(`${profile.name} KOT sent`)
+    } catch (error) {
+      setPrinterStatus(getErrorMessage(error))
+    }
+  }
+
+  async function printKotByRouting() {
     if (!window.posPrinter) {
       setPrinterStatus('Run inside desktop app for KOT printer')
       return
@@ -4870,18 +5425,31 @@ function App() {
       return
     }
 
+    if (!ensureServiceStaffSelected()) {
+      return
+    }
+
     if (activeSavedOrder?.status !== 'paid') {
       saveCurrentOrder('unclosed')
     }
 
-    setPrinterStatus(`Printing ${profile.name} KOT...`)
+    const routeGroups = buildKotRouteGroups(cart)
+    if (!routeGroups.length) {
+      setPrinterStatus('No KOT printer route found')
+      return
+    }
+
+    setPrinterStatus(`Printing KOT to ${routeGroups.length} printer(s)...`)
     try {
-      await window.posPrinter.printKot({
-        settings: profile.settings,
-        kot: buildKotOrder(profile.name),
-      })
+      for (const routeGroup of routeGroups) {
+        await window.posPrinter.printKot({
+          settings: routeGroup.profile.settings,
+          kot: buildKotOrder(routeGroup.profile.name, routeGroup.lines),
+        })
+      }
       setKotPrintOpen(false)
-      setPrinterStatus(`${profile.name} KOT sent`)
+      const itemCount = routeGroups.reduce((total, routeGroup) => total + routeGroup.lines.length, 0)
+      setPrinterStatus(`KOT sent: ${itemCount} item(s) routed to ${routeGroups.length} printer(s)`)
     } catch (error) {
       setPrinterStatus(getErrorMessage(error))
     }
@@ -4932,6 +5500,42 @@ function App() {
     }
   }
 
+  function buildKotRouteGroups(kotItems: CartLine[]) {
+    const routeMap = new Map<string, { profile: PrinterProfile; lines: CartLine[] }>()
+    const currentTables = getCurrentDiningTables(seatingMode, table, selectedTables)
+    const currentTableGroupIds = diningTableGroups
+      .filter((group) => group.tables.some((tableName) => currentTables.includes(tableName)))
+      .map((group) => group.id)
+    const fallbackProfile = billPrinterProfile ?? printerProfiles[0]
+
+    kotItems.forEach((line) => {
+      const categoryId = getCartLineCategoryId(line, menuList)
+      const matchingProfile =
+        printerProfiles.find((profile) => {
+          const categoryMatches = profile.categoryIds.includes(categoryId)
+          const tableGroupMatches =
+            profile.tableGroupIds.length === 0 ||
+            profile.tableGroupIds.some((groupId) => currentTableGroupIds.includes(groupId))
+          return categoryMatches && tableGroupMatches
+        }) ?? fallbackProfile
+
+      if (!matchingProfile) {
+        return
+      }
+
+      const existing = routeMap.get(matchingProfile.id)
+      if (existing) {
+        existing.lines.push(line)
+      } else {
+        routeMap.set(matchingProfile.id, { profile: matchingProfile, lines: [line] })
+      }
+    })
+
+    return printerProfiles
+      .map((profile) => routeMap.get(profile.id))
+      .filter((routeGroup): routeGroup is { profile: PrinterProfile; lines: CartLine[] } => Boolean(routeGroup))
+  }
+
   function buildReceiptOrder() {
     return {
       billNo: String(billNumber),
@@ -4950,6 +5554,8 @@ function App() {
       table: getSeatingDisplayLabel(seatingMode, table, selectedTables, diningGroupName),
       customer,
       cashier: receiptCashierName,
+      serviceStaffName: appConfiguration.showServiceStaffSelector ? selectedServiceStaffName : '',
+      serviceStaffCode: appConfiguration.showServiceStaffSelector ? selectedServiceStaffCode : '',
       paymentMethod,
       paymentBreakdown,
       items: cart.map((line) => ({
@@ -4978,7 +5584,7 @@ function App() {
     }
   }
 
-  function buildKotOrder(station: string) {
+  function buildKotOrder(station: string, kotItems = cart) {
     return {
       billNo: String(billNumber),
       station,
@@ -4986,7 +5592,9 @@ function App() {
       table: getSeatingDisplayLabel(seatingMode, table, selectedTables, diningGroupName),
       customer,
       cashier: receiptCashierName,
-      items: cart.map((line) => ({
+      serviceStaffName: appConfiguration.showServiceStaffSelector ? selectedServiceStaffName : '',
+      serviceStaffCode: appConfiguration.showServiceStaffSelector ? selectedServiceStaffCode : '',
+      items: kotItems.map((line) => ({
         name: line.name,
         qty: line.qty,
         description: line.description ?? '',
@@ -5606,13 +6214,21 @@ function App() {
                 </button>
               )}
               {hasSubscriptionAccess && hasPermission('menu_manage') && (
-                <button className="view-tab utility-tab" type="button" onClick={openMenuSetup}>
+                <button
+                  className={activeView === 'menu' ? 'view-tab utility-tab active' : 'view-tab utility-tab'}
+                  type="button"
+                  onClick={openMenuSetup}
+                >
                   <Pencil size={17} />
                   Menu Setup
                 </button>
               )}
               {hasSubscriptionAccess && hasPermission('printer_manage') && (
-                <button className="view-tab utility-tab" type="button" onClick={openPrinterManager}>
+                <button
+                  className={activeView === 'printers' ? 'view-tab utility-tab active' : 'view-tab utility-tab'}
+                  type="button"
+                  onClick={openPrinterManager}
+                >
                   <Printer size={17} />
                   Printer Manage
                 </button>
@@ -5728,6 +6344,20 @@ function App() {
               <span>Bill and KOT printers</span>
             </button>
             )}
+            {hasSubscriptionAccess && hasPermission('user_manage') && (
+            <button className="home-launch-tile" type="button" onClick={() => goToView('service_staff')}>
+              <User size={34} />
+              <strong>Staff</strong>
+              <span>Service staff codes</span>
+            </button>
+            )}
+            {hasSubscriptionAccess && hasPermission('user_manage') && (
+            <button className="home-launch-tile" type="button" onClick={() => goToView('settings')}>
+              <Settings size={34} />
+              <strong>Settings</strong>
+              <span>App configuration</span>
+            </button>
+            )}
             {hasSubscriptionAccess && hasCloudFeatureAccess && hasPermission('cloud_sync') && hasGoldLocalPlan && (
             <button className="home-launch-tile" type="button" onClick={() => goToView('network')}>
               <Monitor size={34} />
@@ -5742,6 +6372,97 @@ function App() {
               <span>{hasOfflineAccess ? 'Profile and users' : 'Profile, sync, and users'}</span>
             </button>
             )}
+          </div>
+        </section>
+      )}
+
+      {activeView === 'settings' && (
+        <section className="settings-view page-view">
+          <div className="page-head">
+            <div>
+              <span>Settings</span>
+              <h1>Settings</h1>
+              <p>Control app behavior and operational preferences</p>
+            </div>
+            <button className="home-action" type="button" onClick={() => goToView('home')}>
+              <Home size={18} />
+              Home
+            </button>
+          </div>
+
+          <div className="settings-card-grid">
+            <button className="home-launch-tile settings-launch-tile" type="button" onClick={() => goToView('configuration')}>
+              <Settings size={34} />
+              <strong>Configuration</strong>
+              <span>Sale flow and app behavior</span>
+            </button>
+          </div>
+        </section>
+      )}
+
+      {activeView === 'configuration' && (
+        <section className="configuration-view page-view">
+          <div className="page-head">
+            <div>
+              <span>Settings</span>
+              <h1>Configuration</h1>
+              <p>Enable or disable optional steps in daily billing</p>
+            </div>
+            <button className="home-action" type="button" onClick={() => goToView('settings')}>
+              <Settings size={18} />
+              Settings
+            </button>
+          </div>
+
+          <div className="configuration-layout">
+            <section className="home-card configuration-card">
+              <div className="section-title">
+                <strong>Sales Flow</strong>
+                <span>Dining order behavior</span>
+              </div>
+              <label className="configuration-option">
+                <input
+                  type="checkbox"
+                  checked={appConfiguration.showServiceStaffSelector}
+                  onChange={(event) => {
+                    const enabled = event.currentTarget.checked
+                    setAppConfiguration((settings) => ({ ...settings, showServiceStaffSelector: enabled }))
+                    if (!enabled) {
+                      setStaffCodePromptOpen(false)
+                      clearSelectedServiceStaff()
+                    }
+                    setPrinterStatus(enabled ? 'Staff selector enabled for dining sales' : 'Staff selector disabled for dining sales')
+                  }}
+                />
+                <div>
+                  <strong>Show staff selector during sale</strong>
+                  <span>
+                    When enabled, selecting a dining table asks for staff code or staff name. When disabled, billing continues after table selection without staff prompt.
+                  </span>
+                </div>
+              </label>
+            </section>
+
+            <section className="home-card configuration-card">
+              <div className="section-title">
+                <strong>Current Flow</strong>
+                <span>{appConfiguration.showServiceStaffSelector ? 'Staff required' : 'Staff hidden'}</span>
+              </div>
+              <div className="configuration-summary">
+                <div>
+                  <span>Dining Table</span>
+                  <strong>Required</strong>
+                </div>
+                <div>
+                  <span>Staff Selection</span>
+                  <strong>{appConfiguration.showServiceStaffSelector ? 'Enabled' : 'Disabled'}</strong>
+                </div>
+                <div>
+                  <span>Save / Print</span>
+                  <strong>{appConfiguration.showServiceStaffSelector ? 'Requires staff' : 'No staff check'}</strong>
+                </div>
+              </div>
+            </section>
           </div>
         </section>
       )}
@@ -6545,6 +7266,98 @@ function App() {
                   </div>
                 ))}
                 {!recentAuditLog.length && <div className="empty-list">No audit entries yet</div>}
+              </div>
+            </section>
+          </div>
+        </section>
+      )}
+
+      {activeView === 'service_staff' && (
+        <section className="service-staff-view page-view">
+          <div className="page-head">
+            <div>
+              <span>Staff</span>
+              <h1>Service Staff</h1>
+              <p>Add the staff code used after table selection. The matched staff name prints on the bill.</p>
+            </div>
+            <button className="home-action primary" type="button" onClick={startNewServiceStaff}>
+              <Plus size={18} />
+              New Staff
+            </button>
+          </div>
+
+          <div className="service-staff-page-layout">
+            <section className="home-card service-staff-editor-card">
+              <div className="section-title">
+                <strong>{serviceStaffEditorId ? 'Edit Staff' : 'Add Staff'}</strong>
+                <span>Name and code only</span>
+              </div>
+              <div className="profile-form service-staff-form">
+                <label>
+                  Staff Name
+                  <input
+                    value={serviceStaffNameDraft}
+                    onChange={(event) => setServiceStaffNameDraft(event.currentTarget.value)}
+                    placeholder="Waiter / pilot name"
+                  />
+                </label>
+                <label>
+                  Staff Code
+                  <input
+                    value={serviceStaffCodeDraft}
+                    onChange={(event) => setServiceStaffCodeDraft(normalizeStaffCode(event.currentTarget.value))}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        saveServiceStaff()
+                      }
+                    }}
+                    placeholder="101"
+                  />
+                </label>
+              </div>
+              {serviceStaffStatus && <div className="sync-message">{serviceStaffStatus}</div>}
+              <div className="user-editor-actions">
+                <button className="small-button" type="button" onClick={startNewServiceStaff}>
+                  <RefreshCw size={16} />
+                  Clear
+                </button>
+                <button className="small-button primary" type="button" onClick={saveServiceStaff}>
+                  <Save size={16} />
+                  Save Staff
+                </button>
+              </div>
+            </section>
+
+            <section className="home-card service-staff-list-card">
+              <div className="section-title">
+                <strong>Saved Staff</strong>
+                <span>{serviceStaff.length} staff member(s)</span>
+              </div>
+              <div className="service-staff-grid">
+                {serviceStaff.map((staffMember) => (
+                  <article className="service-staff-card" key={staffMember.id}>
+                    <button type="button" className="service-staff-main" onClick={() => editServiceStaff(staffMember)}>
+                      <span>{staffMember.code}</span>
+                      <strong>{staffMember.name}</strong>
+                    </button>
+                    <button type="button" className="small-button icon-only" onClick={() => editServiceStaff(staffMember)} title="Edit staff">
+                      <Pencil size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      className="small-button danger icon-only"
+                      onClick={() => deleteServiceStaff(staffMember)}
+                      title="Delete staff"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </article>
+                ))}
+                {!serviceStaff.length && (
+                  <div className="empty-list">
+                    Add staff names and codes here before live dining billing.
+                  </div>
+                )}
               </div>
             </section>
           </div>
@@ -7395,7 +8208,10 @@ function App() {
               }}
             >
               <UtensilsCrossed size={19} />
-              <span>{getSeatingDisplayLabel(seatingMode, table, selectedTables, diningGroupName) || 'Seating'}</span>
+              <span>
+                {getSeatingDisplayLabel(seatingMode, table, selectedTables, diningGroupName) || 'Seating'}
+                {appConfiguration.showServiceStaffSelector && selectedServiceStaffName ? ` / ${selectedServiceStaffName}` : ''}
+              </span>
             </button>
             <button type="button" className="icon-action" title="Customer" onClick={() => setCustomerEditorOpen(true)}>
               <User size={19} />
@@ -7644,7 +8460,7 @@ function App() {
                   <Save size={18} />
                   Save Bill
                 </button>
-                <button className="action kot" type="button" onClick={() => setKotPrintOpen(true)}>
+                <button className="action kot" type="button" onClick={printKotByRouting}>
                   <Printer size={18} />
                   Print KOT
                 </button>
@@ -8139,6 +8955,90 @@ function App() {
                   </button>
                 )
               })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {staffCodePromptOpen && (
+        <div className="modal-layer" role="dialog" aria-modal="true" aria-label="Staff code">
+          <div className="quick-panel staff-code-panel">
+            <div className="panel-head">
+              <div>
+                <strong>Staff Code</strong>
+                <span>{getSeatingDisplayLabel(seatingMode, table, selectedTables, diningGroupName) || 'Selected table'}</span>
+              </div>
+              <button type="button" onClick={() => setStaffCodePromptOpen(false)} title="Close">
+                <X size={18} />
+              </button>
+            </div>
+
+            <label className="dialog-field">
+              Enter Staff Code
+              <input
+                autoFocus
+                value={staffCodeInput}
+                onChange={(event) => {
+                  const code = normalizeStaffCode(event.currentTarget.value)
+                  const matchedStaff = activeServiceStaff.find((staffMember) => normalizeStaffCode(staffMember.code) === code)
+                  setStaffCodeInput(code)
+                  setStaffCodeStatus(matchedStaff ? `${matchedStaff.name} found` : code ? 'Enter a valid saved staff code' : 'Enter staff code')
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    applyStaffCode()
+                  }
+                }}
+                placeholder="Staff code"
+              />
+            </label>
+
+            {staffCodeStatus && <div className="sync-message">{staffCodeStatus}</div>}
+
+            <div className="staff-code-preview">
+              <span>Selected Staff</span>
+              <strong>{staffCodePreviewStaff?.name || selectedServiceStaffName || 'Not selected'}</strong>
+            </div>
+
+            <div className="staff-picker">
+              <div className="staff-picker-title">
+                <strong>Select Staff</strong>
+                <span>{activeServiceStaff.length} available</span>
+              </div>
+              <div className="staff-picker-list">
+                {activeServiceStaff.map((staffMember) => (
+                  <button
+                    className={staffMember.id === selectedServiceStaffId ? 'staff-picker-row active' : 'staff-picker-row'}
+                    key={staffMember.id}
+                    type="button"
+                    onClick={() => selectServiceStaffForBill(staffMember)}
+                  >
+                    <span>{staffMember.code}</span>
+                    <strong>{staffMember.name}</strong>
+                  </button>
+                ))}
+                {!activeServiceStaff.length && (
+                  <div className="empty-note">No active staff saved. Add staff from Staff Page.</div>
+                )}
+              </div>
+            </div>
+
+            <div className="panel-actions">
+              <button
+                className="small-button"
+                type="button"
+                onClick={() => {
+                  setStaffCodePromptOpen(false)
+                  goToView('service_staff')
+                }}
+              >
+                <User size={16} />
+                Staff Page
+              </button>
+              <button className="small-button primary" type="button" onClick={applyStaffCode}>
+                <Save size={16} />
+                Apply Staff
+              </button>
             </div>
           </div>
         </div>
@@ -8816,17 +9716,26 @@ function App() {
         </div>
       )}
 
-      {menuEditorOpen && (
-        <div className="modal-layer" role="dialog" aria-modal="true" aria-label="Menu editor">
-          <div className="menu-editor-panel">
+      {activeView === 'menu' && (
+        <section className="menu-setup-view page-view">
+          <div className="page-head">
+            <div>
+              <span>Menu</span>
+              <h1>Menu Setup</h1>
+              <p>Manage categories, item photos, prices, tax, availability, and priority order</p>
+            </div>
+            <button className="home-action" type="button" onClick={() => goToView('home')}>
+              <Home size={18} />
+              Home
+            </button>
+          </div>
+
+          <div className="menu-editor-panel full-page-panel">
             <div className="panel-head">
               <div>
                 <strong>Menu Editor</strong>
                 <span>Add or edit categories and items</span>
               </div>
-              <button type="button" onClick={() => setMenuEditorOpen(false)} title="Close">
-                <X size={18} />
-              </button>
             </div>
 
             <div className="editor-layout">
@@ -8899,13 +9808,19 @@ function App() {
                 </div>
 
                 <div className="item-photo-editor">
-                  <div className="item-photo-preview">
+                  <button
+                    className={itemDraft.imageDataUrl ? 'item-photo-preview clickable' : 'item-photo-preview'}
+                    type="button"
+                    disabled={!itemDraft.imageDataUrl}
+                    onClick={() => itemDraft.imageDataUrl && setItemImagePreviewOpen(true)}
+                    title={itemDraft.imageDataUrl ? 'Open image preview' : 'No image selected'}
+                  >
                     {itemDraft.imageDataUrl ? (
                       <img src={itemDraft.imageDataUrl} alt="" />
                     ) : (
                       <ImagePlus size={24} />
                     )}
-                  </div>
+                  </button>
                   <div className="item-photo-actions">
                     <label className="small-button primary">
                       <ImagePlus size={16} />
@@ -8919,13 +9834,27 @@ function App() {
                     <button
                       className="small-button"
                       type="button"
-                      onClick={() => setItemDraft((draft) => ({ ...draft, imageDataUrl: '' }))}
+                      disabled={itemImageSearching}
+                      onClick={generateItemImage}
+                    >
+                      <RefreshCw size={16} />
+                      {itemImageSearching ? 'Searching...' : itemDraft.imageDataUrl ? 'Regenerate' : 'Generate Image'}
+                    </button>
+                    <button
+                      className="small-button"
+                      type="button"
+                      onClick={() => {
+                        setItemDraft((draft) => ({ ...draft, imageDataUrl: '' }))
+                        setItemImagePreviewOpen(false)
+                        setItemImageStatus('Image removed')
+                      }}
                     >
                       <Trash2 size={16} />
                       Remove
                     </button>
                   </div>
                 </div>
+                {itemImageStatus && <div className="image-generate-status">{itemImageStatus}</div>}
 
                 <div className="item-form">
                   <label>
@@ -9078,6 +10007,36 @@ function App() {
                   ))}
                 </div>
               </section>
+
+            </div>
+          </div>
+        </section>
+      )}
+
+      {itemImagePreviewOpen && itemDraft.imageDataUrl && (
+        <div className="modal-layer" role="dialog" aria-modal="true" aria-label="Item image preview">
+          <div className="quick-panel item-image-preview-panel">
+            <div className="panel-head">
+              <div>
+                <strong>{itemDraft.name.trim() || 'Generated Image'}</strong>
+                <span>Preview selected product image</span>
+              </div>
+              <button type="button" onClick={() => setItemImagePreviewOpen(false)} title="Close">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="item-image-preview-large">
+              <img src={itemDraft.imageDataUrl} alt="" />
+            </div>
+            <div className="panel-actions">
+              <button className="small-button" type="button" disabled={itemImageSearching} onClick={generateItemImage}>
+                <RefreshCw size={16} />
+                {itemImageSearching ? 'Searching...' : 'Regenerate'}
+              </button>
+              <button className="small-button primary" type="button" onClick={() => setItemImagePreviewOpen(false)}>
+                <Save size={16} />
+                Use This Image
+              </button>
             </div>
           </div>
         </div>
@@ -9115,7 +10074,8 @@ function App() {
                 type="button"
                 onClick={() => {
                   setKotPrintOpen(false)
-                  setPrinterOpen(true)
+                  setPrinterOpen(false)
+                  setActiveView('printers')
                   refreshPrinters()
                 }}
               >
@@ -9127,22 +10087,341 @@ function App() {
         </div>
       )}
 
-      {printerOpen && (
-        <div className="modal-layer" role="dialog" aria-modal="true" aria-label="Printer settings">
-          <div className="printer-panel">
+      {activeView === 'printers' && (
+        <section className="printer-manage-view page-view">
+          <div className="page-head">
+            <div>
+              <span>Printer</span>
+              <h1>Printer Manage</h1>
+              <p>Add printers, choose installed devices, and manage group-wise KOT routing</p>
+            </div>
+            <button className="home-action primary" type="button" onClick={refreshPrinters}>
+              <RefreshCw size={18} />
+              Refresh Printers
+            </button>
+          </div>
+
+          <div className="printer-dashboard-layout">
+            <section className="printer-add-card home-card">
+              <div className="section-title">
+                <div>
+                  <strong>Add New Printer</strong>
+                  <span>Create a printer profile, then configure device, KOT categories, and table groups</span>
+                </div>
+              </div>
+
+              <div className="printer-add-hero">
+                <div className="printer-summary-icon">
+                  <Printer size={24} />
+                </div>
+                <strong>Start printer setup</strong>
+                <span>Use this for bill, kitchen, juice, tea, floor-wise KOT, or any custom station.</span>
+                <button className="small-button primary" type="button" onClick={openNewPrinterConfiguration}>
+                  <Plus size={16} />
+                  Add New Printer
+                </button>
+              </div>
+
+              <div className="printer-status-line">{printerStatus}</div>
+            </section>
+
+            <section className="printer-list-card home-card">
+              <div className="section-title">
+                <div>
+                  <strong>Saved Printers</strong>
+                  <span>{printerProfiles.length} profile(s)</span>
+                </div>
+              </div>
+
+              <div className="printer-card-grid">
+                {printerProfiles.map((profile) => (
+                  <article className="printer-summary-card minimal" key={profile.id}>
+                    <div className="printer-summary-top">
+                      <div className="printer-summary-icon">
+                        <Printer size={20} />
+                      </div>
+                      <strong>{profile.name || 'Printer Profile'}</strong>
+                    </div>
+
+                    <div className="printer-summary-actions">
+                      <button
+                        className="small-button"
+                        type="button"
+                        onClick={() => {
+                          setActivePrinterProfileId(profile.id)
+                          setPendingNewPrinterId('')
+                          setActiveView('printer_config')
+                        }}
+                      >
+                        <Pencil size={16} />
+                        Edit
+                      </button>
+                      <button className="small-button" type="button" onClick={() => testPrinter(profile.id)}>
+                        <Printer size={16} />
+                        Test Print
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          </div>
+        </section>
+      )}
+
+      {activeView === 'printer_config' && (
+        <section className="printer-config-view page-view">
+          <div className="page-head">
+            <div>
+              <span>Printer</span>
+              <h1>{activePrinterProfile?.name || 'Printer Configuration'}</h1>
+              <p>Configure printer device, receipt size, KOT categories, and table groups</p>
+            </div>
+            <button className="home-action" type="button" onClick={closePrinterConfiguration}>
+              <Printer size={18} />
+              Cancel
+            </button>
+          </div>
+
+          <div className="printer-config-layout">
+            <section className="printer-profile-editor home-card">
+              <div className="section-title">
+                <div>
+                  <strong>Printer Details</strong>
+                  <span>{activePrinterProfile?.id === billPrinterProfile?.id ? 'Default bill printer' : 'Printer profile'}</span>
+                </div>
+              </div>
+
+              <label className="dialog-field">
+                Printer Name
+                <input
+                  value={activePrinterProfile?.name ?? ''}
+                  onChange={(event) => updateActivePrinterProfileName(event.target.value)}
+                />
+              </label>
+
+              <div className="segmented">
+                <button
+                  className={activePrinterSettings.mode === 'system' ? 'active' : ''}
+                  type="button"
+                  onClick={() => updateActivePrinterProfileSettings({ mode: 'system' })}
+                >
+                  <Monitor size={17} />
+                  Windows / USB
+                </button>
+                <button
+                  className={activePrinterSettings.mode === 'network' ? 'active' : ''}
+                  type="button"
+                  onClick={() => updateActivePrinterProfileSettings({ mode: 'network' })}
+                >
+                  <Wifi size={17} />
+                  LAN ESC/POS
+                </button>
+              </div>
+
+              {activePrinterSettings.mode === 'system' ? (
+                <div className="panel-grid">
+                  <label>
+                    Installed Printer
+                    <select
+                      value={activePrinterSettings.deviceName}
+                      onChange={(event) => updateActivePrinterProfileSettings({ deviceName: event.target.value })}
+                    >
+                      <option value="">Select printer</option>
+                      {printers.map((printer) => (
+                        <option key={printer.name} value={printer.name}>
+                          {printer.displayName || printer.name}
+                          {printer.isDefault ? ' (Default)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button type="button" className="small-button" onClick={refreshPrinters}>
+                    <RefreshCw size={16} />
+                    Refresh
+                  </button>
+                </div>
+              ) : (
+                <div className="panel-grid two">
+                  <label>
+                    Printer IP
+                    <input
+                      value={activePrinterSettings.ipAddress}
+                      onChange={(event) => updateActivePrinterProfileSettings({ ipAddress: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Port
+                    <input
+                      value={activePrinterSettings.port}
+                      onChange={(event) => updateActivePrinterProfileSettings({ port: event.target.value })}
+                    />
+                  </label>
+                </div>
+              )}
+
+              <div className="paper-row">
+                <span>Paper Width</span>
+                <button
+                  className={activePrinterSettings.paperWidth === '80' ? 'active' : ''}
+                  type="button"
+                  onClick={() => updateActivePrinterProfileSettings({ paperWidth: '80' })}
+                >
+                  POS 80mm
+                </button>
+                <button
+                  className={activePrinterSettings.paperWidth === '58' ? 'active' : ''}
+                  type="button"
+                  onClick={() => updateActivePrinterProfileSettings({ paperWidth: '58' })}
+                >
+                  POS 58mm
+                </button>
+              </div>
+
+              <div className="panel-actions">
+                {activePrinterProfile?.id !== billPrinterProfile?.id && (
+                  <button
+                    className="small-button"
+                    type="button"
+                    onClick={() => {
+                      if (activePrinterProfile) {
+                        setBillPrinterProfileId(activePrinterProfile.id)
+                        setPrinterStatus(`${activePrinterProfile.name} set as bill printer`)
+                      }
+                    }}
+                  >
+                    <ReceiptText size={16} />
+                    Use for Bill
+                  </button>
+                )}
+                <button className="small-button" type="button" onClick={() => testPrinter()}>
+                  <Printer size={16} />
+                  Test Print
+                </button>
+                <button className="small-button" type="button" onClick={() => testKotPrinter()}>
+                  <Printer size={16} />
+                  Test KOT
+                </button>
+                {activePrinterProfile?.id !== billPrinterProfile?.id && (
+                  <button className="small-button danger" type="button" onClick={deleteActivePrinterProfile}>
+                    <Trash2 size={16} />
+                    Delete
+                  </button>
+                )}
+                <button className="small-button primary" type="button" onClick={saveActivePrinterProfile}>
+                  <Save size={16} />
+                  Save Printer
+                </button>
+              </div>
+            </section>
+
+            <section className="printer-routing-card home-card">
+              <div className="section-title">
+                <div>
+                  <strong>KOT Routing</strong>
+                  <span>Send item groups to this printer automatically</span>
+                </div>
+              </div>
+
+              <div className="route-chip-summary">
+                <div>
+                  <span>Categories</span>
+                  <strong>{activePrinterCategoryLabels.length ? activePrinterCategoryLabels.join(', ') : 'None selected'}</strong>
+                </div>
+                <div>
+                  <span>Table / Floor</span>
+                  <strong>{activePrinterTableGroupLabels.length ? activePrinterTableGroupLabels.join(', ') : 'All tables'}</strong>
+                </div>
+              </div>
+
+              <div className="routing-section-head">
+                <div>
+                  <strong>Add Category</strong>
+                  <span>Choose food sections handled by this printer</span>
+                </div>
+              </div>
+
+              <div className="route-add-row">
+                <select
+                  value={printerRouteCategoryId}
+                  onChange={(event) => setPrinterRouteCategoryId(event.target.value)}
+                >
+                  <option value="">Select category</option>
+                  {editableCategories
+                    .filter((category) => !activePrinterProfile?.categoryIds.includes(category.id))
+                    .map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.label}
+                      </option>
+                    ))}
+                </select>
+                <button className="small-button primary" type="button" onClick={addActivePrinterCategoryRoute}>
+                  <Plus size={16} />
+                  Add Category
+                </button>
+              </div>
+
+              <div className="route-option-grid">
+                {editableCategories.map((category) => (
+                  <label className="route-check-card" key={category.id}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(activePrinterProfile?.categoryIds.includes(category.id))}
+                      onChange={() => toggleActivePrinterCategory(category.id)}
+                    />
+                    <span>{category.label}</span>
+                  </label>
+                ))}
+              </div>
+
+              <div className="routing-section-head">
+                <div>
+                  <strong>Table / Floor Group</strong>
+                  <span>Optional. Leave blank to print for all tables.</span>
+                </div>
+              </div>
+
+              <div className="route-option-grid">
+                {diningTableGroups.length ? (
+                  diningTableGroups.map((group) => (
+                    <label className="route-check-card" key={group.id}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(activePrinterProfile?.tableGroupIds.includes(group.id))}
+                        onChange={() => toggleActivePrinterTableGroup(group.id)}
+                      />
+                      <span>{group.label}</span>
+                    </label>
+                  ))
+                ) : (
+                  <div className="route-empty-state">No table groups added. This printer will apply to all tables.</div>
+                )}
+              </div>
+            </section>
+          </div>
+        </section>
+      )}
+
+      {false && activeView === 'printers' && (
+        <section className="printer-manage-view page-view">
+          <div className="page-head">
+            <div>
+              <span>Printer</span>
+              <h1>Printer Manage</h1>
+              <p>Create bill, KOT, counter, USB, Windows, and LAN ESC/POS printer profiles</p>
+            </div>
+            <button className="home-action primary" type="button" onClick={refreshPrinters}>
+              <RefreshCw size={18} />
+              Refresh Printers
+            </button>
+          </div>
+
+          <div className="printer-panel full-page-panel">
             <div className="panel-head">
               <div>
                 <strong>Printer Manager</strong>
                 <span>Create printer profiles for bill, kitchen, juice, counter, or any section</span>
               </div>
-              <button
-                type="button"
-                onClick={() => setPrinterOpen(false)}
-                aria-label="Close printer manager"
-                title="Close printer manager"
-              >
-                <X size={18} />
-              </button>
             </div>
 
             <div className="printer-manager-layout">
@@ -9326,7 +10605,7 @@ function App() {
               </section>
             </div>
           </div>
-        </div>
+        </section>
       )}
 
       {accessPrompt && (
@@ -10471,6 +11750,10 @@ function createStaffUserId() {
   return `staff-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+function createServiceStaffId() {
+  return `service-staff-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
 function createPrinterProfileId() {
   return `printer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
@@ -10995,6 +12278,7 @@ function normalizeCartLine(line: CartLine): CartLine {
 
   return {
     ...line,
+    category: String((legacyLine as CartLine).category ?? '').trim() || undefined,
     qty,
     price,
     taxRate: Math.max(Number(legacyLine.taxRate ?? 0), 0),
@@ -11049,6 +12333,9 @@ function normalizeSavedOrderPayment(order: SavedOrder): SavedOrder {
     seatingMode?: unknown
     tables?: unknown
     diningGroupName?: unknown
+    serviceStaffId?: unknown
+    serviceStaffName?: unknown
+    serviceStaffCode?: unknown
   }
   const savedTables = parseDiningTableNames(legacyOrder.tables ?? getDiningTablesFromLabel(order.table))
   const discountMode = normalizeDiscountMode(legacyOrder.discountMode)
@@ -11080,6 +12367,9 @@ function normalizeSavedOrderPayment(order: SavedOrder): SavedOrder {
   return {
     ...order,
     customerId: order.customerId || undefined,
+    serviceStaffId: String(legacyOrder.serviceStaffId ?? '').trim() || undefined,
+    serviceStaffName: String(legacyOrder.serviceStaffName ?? '').trim(),
+    serviceStaffCode: String(legacyOrder.serviceStaffCode ?? '').trim(),
     seatingMode,
     tables: savedTables,
     diningGroupName: seatingMode === 'group' ? String(legacyOrder.diningGroupName ?? '').trim() : '',
@@ -11253,6 +12543,8 @@ function normalizePrinterProfiles(profiles: PrinterProfile[]) {
       id: profile.id || (index === 0 ? defaultBillPrinterProfileId : createPrinterProfileId()),
       name: profile.name?.trim() || (index === 0 ? 'Bill Printer' : `Printer ${index + 1}`),
       settings: normalizePrinterSettings(profile.settings),
+      categoryIds: uniqueStrings(profile.categoryIds),
+      tableGroupIds: uniqueStrings(profile.tableGroupIds),
       createdAt: profile.createdAt || now,
       updatedAt: profile.updatedAt || now,
     }))
@@ -11287,9 +12579,51 @@ function createPrinterProfile(id: string, name: string, settings: Partial<Receip
     id,
     name,
     settings: normalizePrinterSettings(settings),
+    categoryIds: [],
+    tableGroupIds: [],
     createdAt: now,
     updatedAt: now,
   }
+}
+
+function uniqueStrings(values?: unknown) {
+  if (!Array.isArray(values)) {
+    return []
+  }
+
+  return Array.from(
+    new Set(
+      values
+        .map((value) => String(value ?? '').trim())
+        .filter(Boolean),
+    ),
+  )
+}
+
+function getPrinterCategoryLabels(profile: PrinterProfile | null | undefined, categories: Category[]) {
+  if (!profile) {
+    return []
+  }
+
+  return profile.categoryIds.map((categoryId) => getCategoryDisplayLabel(categoryId, categories)).filter(Boolean)
+}
+
+function getPrinterTableGroupLabels(profile: PrinterProfile | null | undefined, groups: DiningTableGroup[]) {
+  if (!profile) {
+    return []
+  }
+
+  return profile.tableGroupIds
+    .map((groupId) => groups.find((group) => group.id === groupId)?.label ?? '')
+    .filter(Boolean)
+}
+
+function getCartLineCategoryId(line: CartLine, menuList: MenuItem[]) {
+  return line.category || menuList.find((item) => item.id === line.itemId)?.category || 'all'
+}
+
+function getCategoryDisplayLabel(categoryId: string, categories: Category[]) {
+  return categories.find((category) => category.id === categoryId)?.label || titleCase(categoryId)
 }
 
 function hasConfiguredPrinterSettings(settings?: Partial<ReceiptPrinterSettings>) {
@@ -11417,6 +12751,38 @@ function normalizeCloudSignupBusinessProfile(
 
 function hasCloudSignupDetails(profile: Partial<BusinessProfile>) {
   return Boolean(profile.businessName?.trim() || profile.ownerName?.trim() || profile.phone?.trim() || profile.email?.trim())
+}
+
+function normalizeStaffCode(value: unknown) {
+  return String(value ?? '').trim().replace(/\s+/g, '').toUpperCase()
+}
+
+function normalizeServiceStaff(staffList: ServiceStaff[] = []) {
+  if (!Array.isArray(staffList)) {
+    return []
+  }
+
+  const usedCodes = new Set<string>()
+  return staffList
+    .map((staffMember) => {
+      const name = String(staffMember?.name ?? '').trim()
+      const code = normalizeStaffCode(staffMember?.code)
+      if (!name || !code || usedCodes.has(code)) {
+        return null
+      }
+
+      usedCodes.add(code)
+      const now = new Date().toISOString()
+      return {
+        id: String(staffMember?.id || createServiceStaffId()).trim(),
+        name,
+        code,
+        active: staffMember?.active !== false,
+        createdAt: String(staffMember?.createdAt || now),
+        updatedAt: String(staffMember?.updatedAt || staffMember?.createdAt || now),
+      }
+    })
+    .filter((staffMember): staffMember is ServiceStaff => Boolean(staffMember))
 }
 
 function mergeBusinessProfileWithCloudSignup(
@@ -11599,6 +12965,16 @@ function normalizeMenuDisplaySettings(settings: MenuDisplaySettings) {
       settings.sidePanelWidth > menuDisplayLimits.sidePanelWidth.max
         ? defaultMenuDisplaySettings.sidePanelWidth
         : clampSetting('sidePanelWidth', settings.sidePanelWidth),
+  }
+}
+
+function normalizeAppConfiguration(settings: Partial<AppConfiguration> = {}) {
+  return {
+    ...defaultAppConfiguration,
+    showServiceStaffSelector:
+      typeof settings.showServiceStaffSelector === 'boolean'
+        ? settings.showServiceStaffSelector
+        : defaultAppConfiguration.showServiceStaffSelector,
   }
 }
 

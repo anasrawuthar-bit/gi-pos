@@ -39,3 +39,7 @@ contextBridge.exposeInMainWorld('posServer', {
   getStatus: () => ipcRenderer.invoke('lan-server:status'),
   stop: () => ipcRenderer.invoke('lan-server:stop'),
 });
+
+contextBridge.exposeInMainWorld('posImages', {
+  searchFoodImage: (payload) => ipcRenderer.invoke('image:search-food', payload),
+});

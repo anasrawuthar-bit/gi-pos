@@ -257,6 +257,265 @@ function sanitizeFileName(value) {
   return cleaned || 'GI POS Report.pdf';
 }
 
+async function searchFoodImage(payload = {}) {
+  const name = String(payload.name || '').trim();
+  if (!name) {
+    return { ok: false, error: 'Item name required' };
+  }
+
+  try {
+    const variant = Math.max(1, Number(payload.variant || 1));
+    const profile = buildPinterestFoodProfile(name, payload.category, payload.tags);
+    const candidates = await getPinterestImageCandidates(profile.search);
+    const rankedCandidates = candidates
+      .map((candidate) => ({
+        ...candidate,
+        score: scorePinterestFoodImage(profile, candidate),
+      }))
+      .filter((candidate) => isPinterestFoodImageRelevant(profile, candidate))
+      .sort((a, b) => b.score - a.score);
+    const chosen = rankedCandidates[(variant - 1) % Math.max(1, rankedCandidates.length)];
+
+    if (!chosen) {
+      return { ok: false, error: 'No matching Pinterest food image found' };
+    }
+
+    const dataUrl = await fetchPinterestImageAsDataUrl(chosen.src);
+    return {
+      ok: true,
+      dataUrl,
+      title: cleanPinterestTitle(chosen.alt || chosen.title || name),
+      sourceUrl: chosen.src,
+    };
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Pinterest image fetch failed' };
+  }
+}
+
+function buildPinterestFoodProfile(name, category, tags) {
+  const normalizedName = normalizePinterestText(name);
+  const alias = getPinterestFoodAlias(normalizedName);
+  const search = `${alias.search || normalizedName} food`.trim();
+  const rawTokens = normalizedName
+    .split(' ')
+    .filter((token) => token.length > 2 && !PINTEREST_FOOD_MODIFIER_TOKENS.has(token));
+  const dishTokens = alias.tokens.length ? alias.tokens : rawTokens;
+  const tagTokens = Array.isArray(tags) ? tags.map(normalizePinterestText).filter(Boolean) : [];
+  const categoryTokens = normalizePinterestText(category).split(' ').filter((token) => token.length > 2);
+
+  return {
+    search,
+    dishTokens,
+    rawTokens,
+    categoryTokens,
+    tagTokens,
+    strict: alias.strict,
+    requireAllDishTokens: alias.requireAllDishTokens,
+  };
+}
+
+const PINTEREST_FOOD_MODIFIER_TOKENS = new Set([
+  'buffet',
+  'combo',
+  'full',
+  'half',
+  'quarter',
+  'special',
+  'regular',
+  'large',
+  'small',
+  'plate',
+  'item',
+  'menu',
+]);
+
+function normalizePinterestText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&amp;/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getPinterestFoodAlias(text) {
+  const aliases = [
+    [/alfaham|al faham|alfam|al fahm/, 'alfaham chicken', ['alfaham'], false],
+    [/mandi|mandhi|manthi|mandy/, 'chicken mandi rice', ['mandi', 'mandhi', 'manthi', 'mandy'], false],
+    [/biriyani|biryani/, 'biryani', ['biryani', 'biriyani'], false],
+    [/porotta|parotta/, 'kerala parotta', ['porotta', 'parotta'], false],
+    [/kubbus|kuboos|khubz/, 'khubz bread', ['kubbus', 'kuboos', 'khubz'], false],
+    [/ney pathal|neypathal|pathal/, 'ney pathal', ['pathal', 'neypathal'], false],
+    [/shawarma/, 'shawarma', ['shawarma'], false],
+    [/broast|broasted/, 'broasted chicken', ['broast', 'broasted'], false],
+    [/fish tawa|tawa fish/, 'tawa fish fry', ['fish', 'tawa'], true],
+    [/grill chicken|chicken grill|grilled chicken/, 'grilled chicken', ['grill', 'grilled', 'chicken'], true],
+    [/fresh lime|lime juice/, 'fresh lime juice', ['lime', 'juice'], true],
+    [/fried rice/, 'fried rice', ['fried', 'rice'], true],
+    [/noodle|noodles/, 'noodles food', ['noodle', 'noodles'], false],
+    [/burger/, 'burger food', ['burger'], false],
+    [/pizza/, 'pizza food', ['pizza'], false],
+    [/sandwich/, 'sandwich food', ['sandwich'], false],
+    [/samosa/, 'samosa food', ['samosa'], false],
+    [/cutlet/, 'cutlet food', ['cutlet'], false],
+    [/falooda/, 'falooda dessert', ['falooda'], false],
+    [/shake/, 'milkshake', ['shake'], false],
+  ];
+  const match = aliases.find(([pattern]) => pattern.test(text));
+  return match
+    ? { search: match[1], tokens: match[2], strict: true, requireAllDishTokens: Boolean(match[3]) }
+    : { search: '', tokens: [], strict: false, requireAllDishTokens: false };
+}
+
+async function getPinterestImageCandidates(searchText) {
+  const searchUrl = `https://www.pinterest.com/search/pins/?q=${encodeURIComponent(searchText)}`;
+  const browser = new BrowserWindow({
+    width: 1200,
+    height: 900,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+    },
+  });
+
+  try {
+    await browser.loadURL(searchUrl, {
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
+    });
+    await delay(5500);
+    const candidates = await browser.webContents.executeJavaScript(`
+      (() => {
+        const images = Array.from(document.querySelectorAll('img'));
+        return images
+          .map((image) => ({
+            src: image.currentSrc || image.src || '',
+            alt: image.alt || '',
+            title: image.getAttribute('aria-label') || image.title || '',
+            width: image.naturalWidth || image.width || 0,
+            height: image.naturalHeight || image.height || 0
+          }))
+          .filter((image) => image.src.includes('pinimg.com') && image.width >= 120 && image.height >= 120)
+          .slice(0, 80);
+      })()
+    `);
+    return Array.isArray(candidates) ? dedupePinterestCandidates(candidates) : [];
+  } finally {
+    if (!browser.isDestroyed()) {
+      browser.destroy();
+    }
+  }
+}
+
+function dedupePinterestCandidates(candidates) {
+  const seen = new Set();
+  const result = [];
+  for (const candidate of candidates) {
+    const src = getHighResolutionPinterestUrl(candidate.src);
+    if (!src || seen.has(src)) {
+      continue;
+    }
+
+    seen.add(src);
+    result.push({
+      ...candidate,
+      src,
+      alt: String(candidate.alt || ''),
+      title: String(candidate.title || ''),
+      width: Number(candidate.width || 0),
+      height: Number(candidate.height || 0),
+    });
+  }
+  return result;
+}
+
+function getHighResolutionPinterestUrl(src) {
+  const cleaned = String(src || '').replace(/\\u002F/g, '/').replace(/\\\//g, '/');
+  if (!/^https:\/\/i\.pinimg\.com\//i.test(cleaned)) {
+    return '';
+  }
+
+  return cleaned.replace(/\/(60x60|75x75|136x136|170x|236x|474x|564x)\//i, '/736x/');
+}
+
+function scorePinterestFoodImage(profile, candidate) {
+  const text = normalizePinterestText(`${candidate.alt} ${candidate.title} ${candidate.src}`);
+  let score = 0;
+
+  for (const token of profile.dishTokens) {
+    if (text.includes(token)) score += 14;
+  }
+
+  for (const token of profile.rawTokens) {
+    if (text.includes(token)) score += 8;
+  }
+
+  for (const token of profile.categoryTokens) {
+    if (text.includes(token)) score += 2;
+  }
+
+  for (const token of profile.tagTokens) {
+    if (text.includes(token)) score += 1;
+  }
+
+  for (const token of ['food', 'recipe', 'dish', 'chicken', 'rice', 'restaurant', 'cuisine', 'meal']) {
+    if (text.includes(token)) score += 2;
+  }
+
+  for (const token of ['dress', 'wallpaper', 'drawing', 'logo', 'poster', 'text', 'menu design', 'kitchen design']) {
+    if (text.includes(token)) score -= 15;
+  }
+
+  return score;
+}
+
+function isPinterestFoodImageRelevant(profile, candidate) {
+  const text = normalizePinterestText(`${candidate.alt} ${candidate.title} ${candidate.src}`);
+  const hasDishToken = profile.dishTokens.some((token) => text.includes(token));
+  const hasAllDishTokens = profile.dishTokens.every((token) => text.includes(token));
+  const hasAllRawTokens = profile.rawTokens.length > 0 && profile.rawTokens.every((token) => text.includes(token));
+
+  if (profile.strict) {
+    return profile.requireAllDishTokens ? hasAllDishTokens && candidate.score >= 14 : hasDishToken && candidate.score >= 12;
+  }
+
+  return (hasAllRawTokens && candidate.score >= 10) || (hasDishToken && candidate.score >= 12);
+}
+
+async function fetchPinterestImageAsDataUrl(src) {
+  const response = await fetch(src, {
+    headers: {
+      Referer: 'https://www.pinterest.com/',
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Pinterest image download failed: ${response.status}`);
+  }
+
+  const contentType = response.headers.get('content-type') || 'image/jpeg';
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return `data:${contentType};base64,${buffer.toString('base64')}`;
+}
+
+function cleanPinterestTitle(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/Pinterest/i, '')
+    .trim()
+    .slice(0, 90);
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+ipcMain.handle('image:search-food', async (_event, payload) => searchFoodImage(payload));
+
 ipcMain.handle('receipt:print', async (_event, payload) => {
   const settings = payload?.settings || {};
 
@@ -672,6 +931,7 @@ function buildReceiptHtml(payload) {
   const paperWidth = payload?.settings?.paperWidth === '58' ? 58 : 80;
   const printableWidth = getPrintableHtmlWidthMm(paperWidth);
   const now = new Date(order.createdAt || Date.now());
+  const staffName = order.serviceStaffName || order.cashier || 'Admin';
   const itemRows = order.items
     .map(
       (item) => `
@@ -733,7 +993,7 @@ function buildReceiptHtml(payload) {
           <tr><td>Bill</td><td>${escapeHtml(order.billNo)}</td></tr>
           <tr><td>Date</td><td>${escapeHtml(formatDateTime(now))}</td></tr>
           <tr><td>Order</td><td>${escapeHtml(order.orderType)} ${order.table ? `/ ${escapeHtml(order.table)}` : ''}</td></tr>
-          <tr><td>Cashier</td><td>${escapeHtml(order.cashier || 'Admin')}</td></tr>
+          <tr><td>Staff</td><td>${escapeHtml(staffName)}</td></tr>
         </table>
         <div class="rule"></div>
         <table class="items">${itemRows}</table>
@@ -839,6 +1099,7 @@ function buildKotHtml(payload) {
   const paperWidth = payload?.settings?.paperWidth === '58' ? 58 : 80;
   const printableWidth = getPrintableHtmlWidthMm(paperWidth);
   const now = new Date(kot.createdAt || Date.now());
+  const staffName = kot.serviceStaffName || kot.cashier || 'Admin';
   const itemRows = (kot.items || [])
     .map(
       (item) => `
@@ -896,7 +1157,7 @@ function buildKotHtml(payload) {
           <tr><td>Bill</td><td>${escapeHtml(kot.billNo || '')}</td></tr>
           <tr><td>Date</td><td>${escapeHtml(formatDateTime(now))}</td></tr>
           <tr><td>Order</td><td>${escapeHtml(kot.orderType || '')} ${kot.table ? `/ ${escapeHtml(kot.table)}` : ''}</td></tr>
-          <tr><td>Cashier</td><td>${escapeHtml(kot.cashier || 'Admin')}</td></tr>
+          <tr><td>Staff</td><td>${escapeHtml(staffName)}</td></tr>
         </table>
         <div class="rule"></div>
         <table class="items">${itemRows}</table>
@@ -921,6 +1182,7 @@ function buildEscPosReceipt(payload) {
   const footerNote = business.footerNote || 'Thank you. Visit again.';
   const columns = getEscPosColumns(payload?.settings);
   const parts = [];
+  const staffName = order.serviceStaffName || order.cashier || 'Admin';
 
   push(parts, [0x1b, 0x40]);
   align(parts, 1);
@@ -935,7 +1197,7 @@ function buildEscPosReceipt(payload) {
   text(parts, twoCol('Bill', order.billNo, columns));
   text(parts, twoCol('Date', formatDateTime(new Date(order.createdAt || Date.now())), columns));
   text(parts, twoCol('Order', `${order.orderType}${order.table ? ` / ${order.table}` : ''}`, columns));
-  text(parts, twoCol('Cashier', order.cashier || 'Admin', columns));
+  text(parts, twoCol('Staff', staffName, columns));
   text(parts, line(columns));
 
   for (const item of order.items) {
@@ -973,6 +1235,7 @@ function buildEscPosKot(payload) {
   const kot = payload.kot || {};
   const columns = getEscPosColumns(payload?.settings);
   const parts = [];
+  const staffName = kot.serviceStaffName || kot.cashier || 'Admin';
 
   push(parts, [0x1b, 0x40]);
   align(parts, 1);
@@ -987,7 +1250,7 @@ function buildEscPosKot(payload) {
   text(parts, twoCol('Bill', kot.billNo || '', columns));
   text(parts, twoCol('Date', formatDateTime(new Date(kot.createdAt || Date.now())), columns));
   text(parts, twoCol('Order', `${kot.orderType || ''}${kot.table ? ` / ${kot.table}` : ''}`, columns));
-  text(parts, twoCol('Cashier', kot.cashier || 'Admin', columns));
+  text(parts, twoCol('Staff', staffName, columns));
   text(parts, line(columns));
 
   for (const item of kot.items || []) {
