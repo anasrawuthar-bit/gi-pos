@@ -838,6 +838,7 @@ button {
 }
 
 .action {
+  position: relative;
   justify-content: center;
   gap: 5px;
   min-width: 0;
@@ -866,6 +867,40 @@ button {
 
 .action.dark {
   background: #475569;
+}
+
+.button-shortcut-key {
+  flex: 0 0 auto;
+  min-width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 5px;
+  color: #ffffff;
+  background: #0f172a;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 4px;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.18);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.action .button-shortcut-key {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  font-size: 8px;
+}
+
+.home-launch-tile .button-shortcut-key {
+  position: absolute;
+  top: 10px;
+  right: 10px;
 }
 
 .modal-layer {
@@ -1716,14 +1751,15 @@ button {
 }
 
 .printer-config-layout {
-  max-width: 1040px;
+  max-width: 1180px;
   margin: 0 auto;
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(360px, 0.82fr) minmax(520px, 1.18fr);
 }
 
 .printer-add-card,
 .printer-list-card,
 .printer-routing-card {
+  min-width: 0;
   align-content: start;
 }
 
@@ -1748,6 +1784,108 @@ button {
   margin-top: 4px;
   padding-top: 14px;
   border-top: 1px solid #e5eaf0;
+}
+
+.printer-setup-card {
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-radius: 10px;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.07);
+}
+
+.printer-details-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.printer-install-panel,
+.routing-help-box {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 10px;
+}
+
+.method-panel-head {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.method-panel-head strong,
+.routing-help-box strong {
+  color: #111827;
+}
+
+.method-panel-head span,
+.routing-help-box span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.printer-install-panel.compact {
+  padding: 12px;
+}
+
+.panel-grid.compact {
+  grid-template-columns: minmax(0, 1fr) 110px;
+  align-items: end;
+}
+
+.paper-row.compact {
+  flex-wrap: wrap;
+  margin-top: 0;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 10px;
+}
+
+.routing-priority-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.routing-priority-grid div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-radius: 8px;
+}
+
+.routing-priority-grid span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: #ffffff;
+  background: #0891b2;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.routing-priority-grid strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #111827;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .printer-add-form {
@@ -1803,6 +1941,98 @@ button {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 14px;
+}
+
+.printer-review-list {
+  display: grid;
+  gap: 10px;
+}
+
+.printer-review-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, 0.75fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-radius: 10px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+}
+
+.printer-review-main {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.printer-review-title {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+
+.printer-review-title strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #111827;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.printer-review-title span {
+  padding: 4px 7px;
+  color: #0f6470;
+  background: #ecfeff;
+  border: 1px solid #a5f3fc;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.printer-review-main p {
+  min-width: 0;
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.printer-review-tags {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.printer-review-tags span {
+  max-width: min(180px, 100%);
+  padding: 6px 9px;
+  overflow: hidden;
+  color: #334155;
+  background: #f8fafc;
+  border: 1px solid #e1e7ef;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.printer-review-actions {
+  min-width: max-content;
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
 }
 
 .printer-summary-card {
@@ -1883,8 +2113,7 @@ button {
   font-weight: 800;
 }
 
-.printer-route-summary,
-.route-chip-summary {
+.printer-route-summary {
   display: grid;
   gap: 8px;
 }
@@ -1924,30 +2153,11 @@ button {
   font-weight: 900;
 }
 
-.route-chip-summary {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.route-chip-summary div,
 .route-empty-state {
   padding: 12px;
   background: #f8fafc;
   border: 1px solid #d7dce3;
   border-radius: 8px;
-}
-
-.route-chip-summary span {
-  display: block;
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 900;
-}
-
-.route-chip-summary strong {
-  display: block;
-  margin-top: 5px;
-  color: #111827;
-  line-height: 1.35;
 }
 
 .routing-section-head {
@@ -1979,33 +2189,29 @@ button {
   min-width: 0;
 }
 
-.route-option-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+.route-ticket-list {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  min-height: 40px;
 }
 
-.route-check-card {
+.route-ticket {
   min-width: 0;
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 8px;
+  display: inline-flex;
   align-items: center;
-  padding: 10px;
-  color: #111827;
-  background: #ffffff;
-  border: 1px solid #d7dce3;
-  border-radius: 8px;
+  gap: 7px;
+  max-width: 210px;
+  padding: 8px 10px;
+  color: #0f6470;
+  background: #ecfeff;
+  border: 1px solid #a5f3fc;
+  border-radius: 999px;
+  font-size: 12px;
   font-weight: 900;
 }
 
-.route-check-card input {
-  width: 16px;
-  height: 16px;
-  accent-color: #0f8b94;
-}
-
-.route-check-card span {
+.route-ticket span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2156,13 +2362,87 @@ button {
 
 .settings-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 280px));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 210px));
+  gap: 12px;
   align-items: start;
+  justify-content: start;
 }
 
 .settings-launch-tile {
-  min-height: 210px;
+  width: 100%;
+  min-height: 148px;
+  aspect-ratio: auto;
+  gap: 7px;
+  padding: 14px;
+}
+
+.settings-launch-tile svg {
+  width: 29px;
+  height: 29px;
+}
+
+.settings-launch-tile strong {
+  font-size: 16px;
+}
+
+.settings-launch-tile span {
+  font-size: 11px;
+}
+
+.shortcut-manager-card {
+  display: grid;
+  gap: 14px;
+}
+
+.shortcut-manager-list {
+  display: grid;
+  gap: 10px;
+}
+
+.shortcut-manager-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 8px;
+}
+
+.shortcut-manager-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.shortcut-manager-row span {
+  color: #0f8b94;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.shortcut-manager-row strong {
+  color: #111827;
+  font-size: 15px;
+}
+
+.shortcut-manager-row small {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.shortcut-manager-row input {
+  height: 42px;
+  text-align: center;
+  color: #111827;
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-radius: 8px;
+  font-weight: 900;
 }
 
 .configuration-layout {
@@ -3476,6 +3756,14 @@ button {
     grid-template-columns: 1fr;
   }
 
+  .printer-review-row {
+    grid-template-columns: 1fr;
+  }
+
+  .printer-review-actions {
+    justify-content: flex-start;
+  }
+
   .printer-profile-sidebar,
   .printer-profile-editor .panel-actions {
     position: static;
@@ -3732,7 +4020,10 @@ button {
 .pos-shell .printer-summary-top strong,
 .pos-shell .printer-add-hero strong,
 .pos-shell .printer-route-summary strong,
-.pos-shell .route-chip-summary strong,
+.pos-shell .method-panel-head strong,
+.pos-shell .routing-help-box strong,
+.pos-shell .routing-priority-grid strong,
+.pos-shell .printer-review-title strong,
 .pos-shell .routing-section-head strong,
 .pos-shell .profile-status-card strong,
 .pos-shell .part-auto-amount strong {
@@ -3763,7 +4054,10 @@ button {
 .pos-shell .printer-summary-top span,
 .pos-shell .printer-add-hero span,
 .pos-shell .printer-route-summary span,
-.pos-shell .route-chip-summary span,
+.pos-shell .method-panel-head span,
+.pos-shell .routing-help-box span,
+.pos-shell .printer-review-main p,
+.pos-shell .printer-review-tags span,
 .pos-shell .routing-section-head span,
 .pos-shell .route-empty-state,
 .pos-shell .profile-status-card span,
@@ -3932,15 +4226,20 @@ button {
 .pos-shell .empty-note,
 .pos-shell .configuration-option,
 .pos-shell .configuration-summary div,
+.pos-shell .shortcut-manager-row,
 .pos-shell .printer-profile-sidebar,
 .pos-shell .printer-profile-editor,
+.pos-shell .printer-setup-card,
+.pos-shell .printer-install-panel,
+.pos-shell .routing-help-box,
+.pos-shell .routing-priority-grid div,
+.pos-shell .printer-review-row,
 .pos-shell .printer-profile-list button,
 .pos-shell .printer-summary-card,
 .pos-shell .printer-add-hero,
 .pos-shell .printer-route-summary,
-.pos-shell .route-chip-summary div,
 .pos-shell .route-empty-state,
-.pos-shell .route-check-card,
+.pos-shell .route-ticket,
 .pos-shell .profile-status-card,
 .pos-shell .part-method-buttons button,
 .pos-shell .part-auto-amount,
@@ -3991,15 +4290,27 @@ button {
 .pos-shell .staff-picker-title strong,
 .pos-shell .staff-picker-row strong,
 .pos-shell .configuration-option strong,
-.pos-shell .configuration-summary strong {
+.pos-shell .configuration-summary strong,
+.pos-shell .shortcut-manager-row strong {
   color: var(--text);
 }
 
 .pos-shell .staff-code-preview span,
 .pos-shell .staff-picker-title span,
 .pos-shell .configuration-option span,
-.pos-shell .configuration-summary span {
+.pos-shell .configuration-summary span,
+.pos-shell .shortcut-manager-row small {
   color: var(--text-muted);
+}
+
+.pos-shell .shortcut-manager-row span {
+  color: var(--accent);
+}
+
+.pos-shell .shortcut-manager-row input {
+  color: var(--text);
+  background: var(--field-bg);
+  border-color: var(--border);
 }
 
 .pos-shell .staff-picker-row span {
@@ -4016,6 +4327,19 @@ button {
 .pos-shell .printer-manage-view .printer-panel,
 .pos-shell .printer-profile-editor .panel-actions {
   background: var(--surface);
+}
+
+.pos-shell .printer-review-title span {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.pos-shell .printer-review-tags span,
+.pos-shell .route-ticket {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
 }
 
 .pos-shell .saved-order:has(.order-select-cell input:checked) {
@@ -4414,13 +4738,19 @@ button {
 }
 
 .pos-shell .view-tab.utility-tab {
-  color: var(--text);
-  background: color-mix(in srgb, var(--surface) 72%, var(--surface-2));
+  color: var(--text-muted);
+  background: transparent;
 }
 
+.pos-shell .view-tab:hover,
 .pos-shell .view-tab.utility-tab:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+}
+
+.pos-shell .view-tab.active:hover {
   color: #ffffff;
-  background: var(--accent);
+  background: var(--primary);
 }
 
 .pos-shell .pos-view,
@@ -4581,6 +4911,7 @@ button {
 }
 
 .pos-shell .home-launch-tile {
+  position: relative;
   aspect-ratio: 1 / 1;
   min-height: 150px;
   display: grid;
@@ -4777,6 +5108,13 @@ button {
 
 .pos-shell .section-title {
   margin-bottom: 10px;
+}
+
+.pos-shell .section-title > div,
+.pos-shell .page-head > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
 }
 
 .pos-shell .section-title strong,
@@ -6962,6 +7300,11 @@ button {
   }
 
   .pos-shell .daily-opening-row {
+    grid-template-columns: 1fr;
+  }
+
+  .pos-shell .routing-priority-grid,
+  .pos-shell .route-add-row {
     grid-template-columns: 1fr;
   }
 

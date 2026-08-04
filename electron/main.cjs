@@ -2,7 +2,9 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('node:path');
 const net = require('node:net');
+const os = require('node:os');
 const fs = require('node:fs/promises');
+const { execFile } = require('node:child_process');
 const { createLocalDatabase, registerLocalDatabaseHandlers } = require('./local-db.cjs');
 const { createLanServer, registerLanServerHandlers } = require('./lan-server.cjs');
 
@@ -19,6 +21,91 @@ let updateStatus = {
 const CURRENCY = 'Rs.';
 const APP_NAME = 'GI POS Restaurant';
 const UPDATE_URL = process.env.GI_UPDATE_URL || 'https://goldensea.gihostings.in/updates/win';
+const RAW_PRINT_POWERSHELL = `
+param(
+  [Parameter(Mandatory=$true)][string]$DataPath,
+  [Parameter(Mandatory=$true)][string]$PrinterName,
+  [Parameter(Mandatory=$true)][string]$DocumentName
+)
+
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public class RawPrinterHelper
+{
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+  public class DOCINFOA
+  {
+    [MarshalAs(UnmanagedType.LPStr)] public string pDocName;
+    [MarshalAs(UnmanagedType.LPStr)] public string pOutputFile;
+    [MarshalAs(UnmanagedType.LPStr)] public string pDataType;
+  }
+
+  [DllImport("winspool.Drv", EntryPoint = "OpenPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+  public static extern bool OpenPrinter([MarshalAs(UnmanagedType.LPStr)] string szPrinter, out IntPtr hPrinter, IntPtr pd);
+
+  [DllImport("winspool.Drv", EntryPoint = "ClosePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+  public static extern bool ClosePrinter(IntPtr hPrinter);
+
+  [DllImport("winspool.Drv", EntryPoint = "StartDocPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+  public static extern bool StartDocPrinter(IntPtr hPrinter, Int32 level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
+
+  [DllImport("winspool.Drv", EntryPoint = "EndDocPrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+  public static extern bool EndDocPrinter(IntPtr hPrinter);
+
+  [DllImport("winspool.Drv", EntryPoint = "StartPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+  public static extern bool StartPagePrinter(IntPtr hPrinter);
+
+  [DllImport("winspool.Drv", EntryPoint = "EndPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+  public static extern bool EndPagePrinter(IntPtr hPrinter);
+
+  [DllImport("winspool.Drv", EntryPoint = "WritePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+  public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, Int32 dwCount, out Int32 dwWritten);
+
+  public static bool SendBytesToPrinter(string printerName, byte[] bytes, string documentName)
+  {
+    IntPtr printerHandle = IntPtr.Zero;
+    IntPtr unmanagedBytes = IntPtr.Zero;
+    DOCINFOA docInfo = new DOCINFOA();
+    docInfo.pDocName = documentName;
+    docInfo.pDataType = "RAW";
+
+    try
+    {
+      if (!OpenPrinter(printerName.Normalize(), out printerHandle, IntPtr.Zero)) return false;
+      if (!StartDocPrinter(printerHandle, 1, docInfo)) return false;
+      if (!StartPagePrinter(printerHandle)) return false;
+
+      unmanagedBytes = Marshal.AllocCoTaskMem(bytes.Length);
+      Marshal.Copy(bytes, 0, unmanagedBytes, bytes.Length);
+      Int32 written;
+      bool success = WritePrinter(printerHandle, unmanagedBytes, bytes.Length, out written);
+
+      EndPagePrinter(printerHandle);
+      EndDocPrinter(printerHandle);
+      return success && written == bytes.Length;
+    }
+    finally
+    {
+      if (unmanagedBytes != IntPtr.Zero) Marshal.FreeCoTaskMem(unmanagedBytes);
+      if (printerHandle != IntPtr.Zero) ClosePrinter(printerHandle);
+    }
+  }
+}
+"@
+
+[byte[]]$bytes = [System.IO.File]::ReadAllBytes($DataPath)
+if ($bytes.Length -le 0) {
+  throw "Print data is empty"
+}
+
+$success = [RawPrinterHelper]::SendBytesToPrinter($PrinterName, $bytes, $DocumentName)
+if (-not $success) {
+  $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+  throw "Raw printer write failed for '$PrinterName'. Windows error: $errorCode"
+}
+`;
 
 function getAppIconPath() {
   return process.env.VITE_DEV_SERVER_URL
@@ -648,14 +735,26 @@ async function printKotFromLanServer(payload) {
 }
 
 function printSystemReceipt(payload) {
+  if (shouldUseWindowsRawEscPos(payload?.settings)) {
+    return printWindowsRawEscPos(payload?.settings, buildEscPosReceipt(payload), 'GI POS Receipt');
+  }
+
   return printSystemHtml(payload, buildReceiptHtml(payload), 'Printer rejected the print job');
 }
 
 function printSystemKot(payload) {
+  if (shouldUseWindowsRawEscPos(payload?.settings)) {
+    return printWindowsRawEscPos(payload?.settings, buildEscPosKot(payload), 'GI POS KOT');
+  }
+
   return printSystemHtml(payload, buildKotHtml(payload), 'Printer rejected the KOT print job');
 }
 
 function printSystemReport(payload) {
+  if (shouldUseWindowsRawEscPos(payload?.settings)) {
+    return printWindowsRawEscPos(payload?.settings, buildEscPosReport(payload), 'GI POS Report');
+  }
+
   return printSystemHtml(payload, buildReportHtml(payload), 'Printer rejected the report print job');
 }
 
@@ -718,6 +817,11 @@ function printSystemHtml(payload, html, rejectionMessage) {
 
     printWindow.webContents.once('did-finish-load', async () => {
       try {
+        const metrics = await waitForPrintableContent(printWindow);
+        if (!metrics.textLength || metrics.height < 40) {
+          throw new Error('Print content is blank. Check printer mode and try Test Print again.');
+        }
+
         const options = {
           silent: true,
           printBackground: true,
@@ -725,7 +829,7 @@ function printSystemHtml(payload, html, rejectionMessage) {
           deviceName,
           pageSize: {
             width: getPaperWidthMicrons(settings),
-            height: await getPrintContentHeightMicrons(printWindow),
+            height: getPrintContentHeightMicronsFromPixels(metrics.height),
           },
         };
 
@@ -743,23 +847,50 @@ function printSystemHtml(payload, html, rejectionMessage) {
       }
     });
 
+    printWindow.webContents.once('did-fail-load', (_event, _errorCode, errorDescription) => {
+      printWindow.close();
+      reject(new Error(errorDescription || 'Failed to load print content'));
+    });
+
     printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
   });
 }
 
-async function getPrintContentHeightMicrons(printWindow) {
-  const contentHeightPx = await printWindow.webContents.executeJavaScript(
+async function waitForPrintableContent(printWindow) {
+  return printWindow.webContents.executeJavaScript(
     `
-      Math.ceil(Math.max(
-        document.body.scrollHeight,
-        document.body.offsetHeight,
-        document.documentElement.scrollHeight,
-        document.documentElement.offsetHeight
-      ))
+      new Promise((resolve) => {
+        const done = () => {
+          const height = Math.ceil(Math.max(
+            document.body.scrollHeight,
+            document.body.offsetHeight,
+            document.documentElement.scrollHeight,
+            document.documentElement.offsetHeight
+          ));
+          const textLength = (document.body.innerText || '').trim().length;
+          resolve({ height, textLength });
+        };
+
+        const images = Array.from(document.images || []);
+        const waitForImages = images.length
+          ? Promise.all(images.map((image) => image.complete ? true : new Promise((resolveImage) => {
+              image.addEventListener('load', resolveImage, { once: true });
+              image.addEventListener('error', resolveImage, { once: true });
+            })))
+          : Promise.resolve();
+
+        waitForImages
+          .then(() => document.fonts && document.fonts.ready ? document.fonts.ready : undefined)
+          .then(() => requestAnimationFrame(() => requestAnimationFrame(done)))
+          .catch(done);
+      })
     `,
     true,
   );
-  const safeHeightPx = Math.max(Number(contentHeightPx || 0), 120);
+}
+
+function getPrintContentHeightMicronsFromPixels(contentHeightPx) {
+  const safeHeightPx = Math.max(Number(contentHeightPx || 0), 180);
   const micronsPerCssPixel = 25400 / 96;
   const feedMarginMicrons = 6000;
 
@@ -776,6 +907,47 @@ function getPrintableHtmlWidthMm(paperWidth) {
 
 function getEscPosColumns(settings) {
   return settings?.paperWidth === '58' ? 28 : 40;
+}
+
+function shouldUseWindowsRawEscPos(settings = {}) {
+  return process.platform === 'win32' && (settings.printMethod || 'escpos') === 'escpos';
+}
+
+async function printWindowsRawEscPos(settings = {}, body, jobName) {
+  const printerName = String(settings.deviceName || '').trim();
+  if (!printerName) {
+    throw new Error('Select installed printer before printing');
+  }
+
+  const tempDir = app.getPath('temp') || os.tmpdir();
+  const uniqueId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const dataPath = path.join(tempDir, `gi-pos-print-${uniqueId}.bin`);
+  const scriptPath = path.join(tempDir, `gi-pos-raw-print-${uniqueId}.ps1`);
+
+  await fs.writeFile(dataPath, body);
+  await fs.writeFile(scriptPath, RAW_PRINT_POWERSHELL, 'utf8');
+
+  try {
+    await execFilePromise(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, dataPath, printerName, jobName || 'GI POS Print'],
+      { windowsHide: true, timeout: 20000 },
+    );
+  } finally {
+    await Promise.allSettled([fs.unlink(dataPath), fs.unlink(scriptPath)]);
+  }
+}
+
+function execFilePromise(command, args, options) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, options, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(String(stderr || stdout || error.message || error)));
+        return;
+      }
+      resolve(stdout);
+    });
+  });
 }
 
 function printNetworkReceipt(payload) {
@@ -953,14 +1125,18 @@ function buildReceiptHtml(payload) {
         <style>
           @page { margin: 0; size: ${paperWidth}mm auto; }
           * { box-sizing: border-box; }
+          html { background: #fff; }
           body {
             margin: 0 auto;
             padding: 1.5mm 1.5mm 4mm;
             width: ${printableWidth}mm;
+            background: #fff;
             color: #111;
             font-family: "Arial", "Segoe UI", sans-serif;
             font-size: ${paperWidth === 58 ? 9 : 11}px;
             overflow: visible;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
           }
           .center { text-align: center; }
           .logo { width: ${paperWidth === 58 ? 34 : 44}px; height: ${paperWidth === 58 ? 34 : 44}px; object-fit: contain; margin-bottom: 4px; }
@@ -1034,14 +1210,18 @@ function buildReportHtml(payload) {
         <style>
           @page { margin: 0; size: ${paperWidth}mm auto; }
           * { box-sizing: border-box; }
+          html { background: #fff; }
           body {
             margin: 0 auto;
             padding: 1.5mm 1.5mm 4mm;
             width: ${printableWidth}mm;
+            background: #fff;
             color: #111;
             font-family: "Arial", "Segoe UI", sans-serif;
             font-size: ${paperWidth === 58 ? 9 : 11}px;
             overflow: visible;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
           }
           .center { text-align: center; }
           .shop { font-size: ${paperWidth === 58 ? 14 : 17}px; font-weight: 800; }
@@ -1122,14 +1302,18 @@ function buildKotHtml(payload) {
         <style>
           @page { margin: 0; size: ${paperWidth}mm auto; }
           * { box-sizing: border-box; }
+          html { background: #fff; }
           body {
             margin: 0 auto;
             padding: 1.5mm 1.5mm 4mm;
             width: ${printableWidth}mm;
+            background: #fff;
             color: #111;
             font-family: "Arial", "Segoe UI", sans-serif;
             font-size: ${paperWidth === 58 ? 11 : 13}px;
             overflow: visible;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
           }
           .center { text-align: center; }
           .title { font-size: ${paperWidth === 58 ? 18 : 22}px; font-weight: 900; letter-spacing: .8px; }
@@ -1357,11 +1541,18 @@ function push(parts, bytes) {
 }
 
 function text(parts, value) {
-  parts.push(Buffer.from(ascii(value), 'ascii'));
+  parts.push(Buffer.from(toEscPosText(value), 'ascii'));
 }
 
 function ascii(value) {
   return String(value ?? '').replace(/[^\x20-\x7E\n\r]/g, '');
+}
+
+function toEscPosText(value) {
+  return ascii(value)
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\n/g, '\r\n');
 }
 
 function align(parts, value) {

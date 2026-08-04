@@ -13,6 +13,7 @@ import {
   Heart,
   Home,
   ImagePlus,
+  Keyboard,
   LogOut,
   Minus,
   Monitor,
@@ -71,8 +72,23 @@ type AppView =
   | 'service_staff'
   | 'settings'
   | 'configuration'
+  | 'keyboard_shortcuts'
 type ReportPeriodMode = 'custom' | 'monthly' | 'yearly'
 type DiscountMode = 'percent' | 'amount'
+type ShortcutScope = 'global' | 'home' | 'pos'
+type ShortcutActionId =
+  | 'global-lock'
+  | 'global-theme'
+  | 'home-pos'
+  | 'home-report'
+  | 'home-settings'
+  | 'pos-print-bill'
+  | 'pos-save-print'
+  | 'pos-save-bill'
+  | 'pos-hold'
+  | 'pos-kot'
+  | 'pos-new-order'
+  | 'pos-orders'
 type StaffPermission =
   | 'pos_access'
   | 'reports'
@@ -214,6 +230,15 @@ type SavedOrder = {
   creditApplied?: boolean
   createdAt: string
   updatedAt: string
+}
+
+type KeyboardShortcutDefinition = {
+  id: ShortcutActionId
+  scope: ShortcutScope
+  key: string
+  action: string
+  description: string
+  permission?: StaffPermission
 }
 
 type ServiceStaff = {
@@ -766,6 +791,7 @@ const menuDisplayLimits: Record<keyof MenuDisplaySettings, { min: number; max: n
 
 const defaultPrinterSettings: ReceiptPrinterSettings = {
   mode: 'system',
+  printMethod: 'driver',
   deviceName: '',
   ipAddress: '192.168.1.50',
   port: '9100',
@@ -773,6 +799,103 @@ const defaultPrinterSettings: ReceiptPrinterSettings = {
 }
 
 const defaultBillPrinterProfileId = 'bill-printer'
+const keyboardShortcutsStorageKey = 'pos-keyboard-shortcuts'
+const keyboardShortcutsEnabledStorageKey = 'pos-keyboard-shortcuts-enabled'
+const defaultKeyboardShortcuts: KeyboardShortcutDefinition[] = [
+  {
+    id: 'global-lock',
+    scope: 'global',
+    key: 'L',
+    action: 'Lock app',
+    description: 'Return to the PIN login screen.',
+  },
+  {
+    id: 'global-theme',
+    scope: 'global',
+    key: 'T',
+    action: 'Switch theme',
+    description: 'Toggle light and dark mode.',
+  },
+  {
+    id: 'home-pos',
+    scope: 'home',
+    key: 'P',
+    action: 'Open POS Sale',
+    description: 'Open the billing screen from Home.',
+    permission: 'pos_access',
+  },
+  {
+    id: 'home-report',
+    scope: 'home',
+    key: 'R',
+    action: 'Open Report',
+    description: 'Open sales reports from Home.',
+    permission: 'reports',
+  },
+  {
+    id: 'home-settings',
+    scope: 'home',
+    key: 'S',
+    action: 'Open Settings',
+    description: 'Open app settings from Home.',
+  },
+  {
+    id: 'pos-print-bill',
+    scope: 'pos',
+    key: 'Enter',
+    action: 'Print Bill',
+    description: 'Save the current bill and print it.',
+    permission: 'pos_access',
+  },
+  {
+    id: 'pos-save-print',
+    scope: 'pos',
+    key: 'P',
+    action: 'Save & Print',
+    description: 'Save the bill and send it to the bill printer.',
+    permission: 'pos_access',
+  },
+  {
+    id: 'pos-save-bill',
+    scope: 'pos',
+    key: 'S',
+    action: 'Save Bill',
+    description: 'Save the bill without printing.',
+    permission: 'pos_access',
+  },
+  {
+    id: 'pos-hold',
+    scope: 'pos',
+    key: 'H',
+    action: 'Hold Bill',
+    description: 'Move the current order to Hold.',
+    permission: 'pos_access',
+  },
+  {
+    id: 'pos-kot',
+    scope: 'pos',
+    key: 'K',
+    action: 'Print KOT',
+    description: 'Print kitchen order tickets by printer routing.',
+    permission: 'pos_access',
+  },
+  {
+    id: 'pos-new-order',
+    scope: 'pos',
+    key: 'N',
+    action: 'New Order',
+    description: 'Start a new order and protect the current bill.',
+    permission: 'pos_access',
+  },
+  {
+    id: 'pos-orders',
+    scope: 'pos',
+    key: 'O',
+    action: 'Orders',
+    description: 'Open the order list.',
+    permission: 'pos_access',
+  },
+]
 
 const initialCart: CartLine[] = []
 
@@ -892,6 +1015,13 @@ function App() {
     const savedTheme = localStorage.getItem('pos-theme')
     return savedTheme === 'dark' ? 'dark' : 'light'
   })
+  const [keyboardShortcutOverrides, setKeyboardShortcutOverrides] = useState<Record<string, string>>(() =>
+    normalizeKeyboardShortcutOverrides(loadStoredObject<Record<string, string>>(keyboardShortcutsStorageKey, {})),
+  )
+  const [keyboardShortcutsEnabled, setKeyboardShortcutsEnabled] = useState(() =>
+    normalizeKeyboardShortcutsEnabled(localStorage.getItem(keyboardShortcutsEnabledStorageKey)),
+  )
+  const [shortcutHintsVisible, setShortcutHintsVisible] = useState(false)
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null)
   const [categoryName, setCategoryName] = useState('')
   const [draggedCategoryId, setDraggedCategoryId] = useState<string | null>(null)
@@ -926,10 +1056,10 @@ function App() {
   const [billPrinterProfileId, setBillPrinterProfileId] = useState(
     () => localStorage.getItem('bill-printer-profile-id') || defaultBillPrinterProfileId,
   )
-  const [printerProfileName, setPrinterProfileName] = useState('')
-  const [printerProfileDeviceName, setPrinterProfileDeviceName] = useState('')
   const [printerRouteCategoryId, setPrinterRouteCategoryId] = useState('')
+  const [printerRouteTableGroupId, setPrinterRouteTableGroupId] = useState('')
   const [pendingNewPrinterId, setPendingNewPrinterId] = useState('')
+  const [printerDraftProfile, setPrinterDraftProfile] = useState<PrinterProfile | null>(null)
   const [storageReady, setStorageReady] = useState(() => !hasDesktopDataStore())
   const [localDatabasePath, setLocalDatabasePath] = useState('')
   const [localDatabaseDataDir, setLocalDatabaseDataDir] = useState('')
@@ -962,6 +1092,7 @@ function App() {
   const customersRef = useRef(customers)
   const qrOrdersRef = useRef(qrOrders)
   const runCloudSyncRef = useRef<(trigger: 'manual' | 'auto') => Promise<boolean>>(async () => false)
+  const shortcutActionRunnerRef = useRef<(actionId: ShortcutActionId) => void>(() => undefined)
   const refreshLocalServerStatus = useCallback(async () => {
     if (!window.posServer) {
       setLocalServerStatus({
@@ -1360,6 +1491,41 @@ function App() {
     () => new Set(currentUser && isOwnerStaffUser(currentUser) ? allStaffPermissionIds : (currentUser?.permissions ?? [])),
     [currentUser],
   )
+  const keyboardShortcuts = useMemo(
+    () =>
+      defaultKeyboardShortcuts.map((shortcut) => ({
+        ...shortcut,
+        key: keyboardShortcutOverrides[shortcut.id] || shortcut.key,
+      })),
+    [keyboardShortcutOverrides],
+  )
+  const availableKeyboardShortcuts = useMemo(
+    () =>
+      keyboardShortcutsEnabled
+        ? keyboardShortcuts.filter(
+            (shortcut) => !shortcut.permission || currentPermissionSet.has(shortcut.permission),
+          )
+        : [],
+    [currentPermissionSet, keyboardShortcuts, keyboardShortcutsEnabled],
+  )
+  const currentKeyboardShortcuts = useMemo(
+    () =>
+      availableKeyboardShortcuts.filter(
+        (shortcut) =>
+          (activeView !== 'keyboard_shortcuts' && shortcut.scope === 'global') ||
+          (activeView === 'home' && shortcut.scope === 'home') ||
+          (activeView === 'pos' && shortcut.scope === 'pos'),
+      ),
+    [activeView, availableKeyboardShortcuts],
+  )
+  const currentShortcutKeyById = useMemo(
+    () => new Map(currentKeyboardShortcuts.map((shortcut) => [shortcut.id, shortcut.key])),
+    [currentKeyboardShortcuts],
+  )
+  const renderShortcutKey = (shortcutId: ShortcutActionId) => {
+    const shortcutKey = currentShortcutKeyById.get(shortcutId)
+    return shortcutHintsVisible && shortcutKey ? <kbd className="button-shortcut-key">{shortcutKey}</kbd> : null
+  }
   const recentAuditLog = useMemo(() => auditLog.slice(0, 8), [auditLog])
   const billPrinterProfile = useMemo(
     () =>
@@ -1373,15 +1539,8 @@ function App() {
     [activePrinterProfileId, billPrinterProfile, printerProfiles],
   )
   const billPrinterSettings = billPrinterProfile?.settings ?? defaultPrinterSettings
-  const activePrinterSettings = activePrinterProfile?.settings ?? defaultPrinterSettings
-  const activePrinterCategoryLabels = useMemo(
-    () => getPrinterCategoryLabels(activePrinterProfile, categoryList),
-    [activePrinterProfile, categoryList],
-  )
-  const activePrinterTableGroupLabels = useMemo(
-    () => getPrinterTableGroupLabels(activePrinterProfile, diningTableGroups),
-    [activePrinterProfile, diningTableGroups],
-  )
+  const activePrinterDraft = printerDraftProfile ?? activePrinterProfile
+  const activePrinterSettings = activePrinterDraft?.settings ?? defaultPrinterSettings
 
   const menuGridStyle = useMemo<MenuGridStyle>(
     () => ({
@@ -1586,6 +1745,13 @@ function App() {
           localStorage.getItem('active-printer-profile-id') || defaultBillPrinterProfileId,
         )
         const loadedTheme = readDbValue(snapshot, 'pos-theme', localStorage.getItem('pos-theme') || 'light')
+        const loadedKeyboardShortcutsEnabled = normalizeKeyboardShortcutsEnabled(
+          readDbValue(
+            snapshot,
+            keyboardShortcutsEnabledStorageKey,
+            localStorage.getItem(keyboardShortcutsEnabledStorageKey),
+          ),
+        )
 
         setCategoryList(loadedCategories)
         setDiningTableGroups(loadedDiningTableGroups)
@@ -1612,6 +1778,7 @@ function App() {
         setBillNumber(getInitialBillNumber(loadedOrders))
         setBillFinancialYear(getFinancialYearKey(new Date()))
         setTheme(loadedTheme === 'dark' ? 'dark' : 'light')
+        setKeyboardShortcutsEnabled(loadedKeyboardShortcutsEnabled)
         setLocalDatabasePath(snapshot.path)
         setLocalDatabaseDataDir(snapshot.dataDir ?? '')
         setLocalDatabaseBackupDir(snapshot.backupDir ?? '')
@@ -1795,6 +1962,26 @@ function App() {
   }, [theme, storageReady])
 
   useEffect(() => {
+    persistStoredValue(
+      keyboardShortcutsStorageKey,
+      keyboardShortcutOverrides,
+      storageReady && !skipPersistenceRef.current,
+    )
+  }, [keyboardShortcutOverrides, storageReady])
+
+  useEffect(() => {
+    persistStoredValue(
+      keyboardShortcutsEnabledStorageKey,
+      keyboardShortcutsEnabled,
+      storageReady && !skipPersistenceRef.current,
+      String(keyboardShortcutsEnabled),
+    )
+    if (!keyboardShortcutsEnabled) {
+      setShortcutHintsVisible(false)
+    }
+  }, [keyboardShortcutsEnabled, storageReady])
+
+  useEffect(() => {
     const timer = window.setInterval(() => setCurrentDate(new Date()), 1000)
     return () => window.clearInterval(timer)
   }, [])
@@ -1956,6 +2143,87 @@ function App() {
     }
   }, [currentUser])
 
+  shortcutActionRunnerRef.current = (actionId: ShortcutActionId) => {
+    if (actionId === 'global-lock') {
+      lockApp()
+    } else if (actionId === 'global-theme') {
+      setTheme((mode) => (mode === 'dark' ? 'light' : 'dark'))
+    } else if (actionId === 'home-pos') {
+      goToView('pos')
+    } else if (actionId === 'home-report') {
+      goToView('reports')
+    } else if (actionId === 'home-settings') {
+      goToView('settings')
+    } else if (actionId === 'pos-print-bill' || actionId === 'pos-save-print') {
+      void printReceipt(true)
+    } else if (actionId === 'pos-save-bill') {
+      void savePaidOrder()
+    } else if (actionId === 'pos-hold') {
+      holdCurrentOrder()
+    } else if (actionId === 'pos-kot') {
+      void printKotByRouting()
+    } else if (actionId === 'pos-new-order') {
+      newOrder()
+    } else if (actionId === 'pos-orders') {
+      openOrderList('orders')
+    }
+  }
+
+  useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) {
+        return false
+      }
+
+      const tagName = target.tagName.toLowerCase()
+      return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target.isContentEditable
+    }
+
+    const hasActiveModal = () => Boolean(document.querySelector('.modal-layer'))
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Alt') {
+        if (currentKeyboardShortcuts.length) {
+          event.preventDefault()
+          setShortcutHintsVisible(true)
+        }
+        return
+      }
+
+      if (event.repeat || !currentUser || isTypingTarget(event.target) || hasActiveModal()) {
+        return
+      }
+
+      if (event.ctrlKey || event.metaKey) {
+        return
+      }
+
+      const shortcut = currentKeyboardShortcuts.find((entry) => isShortcutKeyMatch(entry.key, event.key))
+      if (shortcut) {
+        event.preventDefault()
+        shortcutActionRunnerRef.current(shortcut.id)
+      }
+    }
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === 'Alt') {
+        setShortcutHintsVisible(false)
+      }
+    }
+
+    const hideShortcutHints = () => setShortcutHintsVisible(false)
+
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', hideShortcutHints)
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('blur', hideShortcutHints)
+    }
+  }, [currentKeyboardShortcuts, currentUser])
+
   const itemCount = cart.reduce((sum, line) => sum + line.qty, 0)
   const billingBusinessName = businessProfile.businessName.trim()
   const billingOwnerName = businessProfile.ownerName.trim()
@@ -2054,8 +2322,9 @@ function App() {
     if (view === 'menu') return 'menu_manage'
     if (view === 'printers') return 'printer_manage'
     if (view === 'printer_config') return 'printer_manage'
-    if (view === 'settings') return 'user_manage'
+    if (view === 'settings') return null
     if (view === 'configuration') return 'user_manage'
+    if (view === 'keyboard_shortcuts') return 'user_manage'
     if (view === 'network') return 'cloud_sync'
     return null
   }
@@ -2084,8 +2353,17 @@ function App() {
     if (view === 'menu') return hasPermission('menu_manage')
     if (view === 'printers') return hasPermission('printer_manage')
     if (view === 'printer_config') return hasPermission('printer_manage')
-    if (view === 'settings') return hasPermission('user_manage')
+    if (view === 'settings') {
+      return (
+        hasPermission('user_manage') ||
+        hasPermission('business_profile') ||
+        hasPermission('menu_manage') ||
+        hasPermission('printer_manage') ||
+        (hasCloudFeatureAccess && hasPermission('cloud_sync'))
+      )
+    }
     if (view === 'configuration') return hasPermission('user_manage')
+    if (view === 'keyboard_shortcuts') return hasPermission('user_manage')
     if (view === 'network') return hasPermission('cloud_sync') && hasGoldLocalPlan
 
     return false
@@ -2933,6 +3211,16 @@ function App() {
       { key: 'active-printer-profile-id', value: JSON.stringify(activePrinterProfileId), localValue: activePrinterProfileId },
       { key: 'pos-menu-display-settings', value: JSON.stringify(menuDisplaySettings), localValue: JSON.stringify(menuDisplaySettings) },
       { key: 'pos-theme', value: JSON.stringify(theme), localValue: theme },
+      {
+        key: keyboardShortcutsStorageKey,
+        value: JSON.stringify(keyboardShortcutOverrides),
+        localValue: JSON.stringify(keyboardShortcutOverrides),
+      },
+      {
+        key: keyboardShortcutsEnabledStorageKey,
+        value: JSON.stringify(keyboardShortcutsEnabled),
+        localValue: String(keyboardShortcutsEnabled),
+      },
       { key: 'pos-cloud-sync-settings', value: JSON.stringify(nextSettings), localValue: JSON.stringify(nextSettings) },
     ]
 
@@ -5080,64 +5368,59 @@ function App() {
     )
   }
 
-  function updatePrinterProfileRoutes(
-    profileId: string,
-    next: Partial<Pick<PrinterProfile, 'categoryIds' | 'tableGroupIds'>>,
-  ) {
-    setPrinterProfiles((profiles) =>
-      profiles.map((profile) =>
-        profile.id === profileId
-          ? {
-              ...profile,
-              categoryIds: next.categoryIds ? uniqueStrings(next.categoryIds) : profile.categoryIds,
-              tableGroupIds: next.tableGroupIds ? uniqueStrings(next.tableGroupIds) : profile.tableGroupIds,
-              updatedAt: new Date().toISOString(),
-            }
-          : profile,
-      ),
-    )
-  }
-
   function updateActivePrinterProfileSettings(next: Partial<ReceiptPrinterSettings>) {
-    if (!activePrinterProfile) {
+    const baseProfile = activePrinterDraft ?? activePrinterProfile
+    if (!baseProfile) {
       return
     }
 
-    updatePrinterProfileSettings(activePrinterProfile.id, next)
+    setPrinterDraftProfile((draft) => {
+      const baseDraft = draft ?? createPrinterEditDraft(baseProfile)
+      return {
+        ...baseDraft,
+        settings: normalizePrinterSettings({ ...baseDraft.settings, ...next }),
+        updatedAt: new Date().toISOString(),
+      }
+    })
   }
 
   function updateActivePrinterProfileName(name: string) {
-    if (!activePrinterProfile) {
+    const baseProfile = activePrinterDraft ?? activePrinterProfile
+    if (!baseProfile) {
       return
     }
 
-    setPrinterProfiles((profiles) =>
-      profiles.map((profile) =>
-        profile.id === activePrinterProfile.id ? { ...profile, name, updatedAt: new Date().toISOString() } : profile,
-      ),
-    )
+    setPrinterDraftProfile((draft) => {
+      const baseDraft = draft ?? createPrinterEditDraft(baseProfile)
+      return { ...baseDraft, name, updatedAt: new Date().toISOString() }
+    })
   }
 
   function toggleActivePrinterCategory(categoryId: string) {
-    if (!activePrinterProfile) {
+    const baseProfile = activePrinterDraft ?? activePrinterProfile
+    if (!baseProfile) {
       return
     }
 
-    const nextCategoryIds = activePrinterProfile.categoryIds.includes(categoryId)
-      ? activePrinterProfile.categoryIds.filter((id) => id !== categoryId)
-      : [...activePrinterProfile.categoryIds, categoryId]
+    const nextCategoryIds = baseProfile.categoryIds.includes(categoryId)
+      ? baseProfile.categoryIds.filter((id) => id !== categoryId)
+      : [...baseProfile.categoryIds, categoryId]
 
-    updatePrinterProfileRoutes(activePrinterProfile.id, { categoryIds: nextCategoryIds })
+    setPrinterDraftProfile((draft) => {
+      const baseDraft = draft ?? createPrinterEditDraft(baseProfile)
+      return { ...baseDraft, categoryIds: uniqueStrings(nextCategoryIds), updatedAt: new Date().toISOString() }
+    })
   }
 
   function addActivePrinterCategoryRoute() {
-    if (!activePrinterProfile) {
+    const baseProfile = activePrinterDraft ?? activePrinterProfile
+    if (!baseProfile) {
       return
     }
 
     const categoryId =
       printerRouteCategoryId ||
-      editableCategories.find((category) => !activePrinterProfile.categoryIds.includes(category.id))?.id ||
+      editableCategories.find((category) => !baseProfile.categoryIds.includes(category.id))?.id ||
       ''
 
     if (!categoryId) {
@@ -5145,61 +5428,70 @@ function App() {
       return
     }
 
-    if (activePrinterProfile.categoryIds.includes(categoryId)) {
+    if (baseProfile.categoryIds.includes(categoryId)) {
       setPrinterStatus(`${getCategoryDisplayLabel(categoryId, categoryList)} already added`)
       return
     }
 
-    updatePrinterProfileRoutes(activePrinterProfile.id, {
-      categoryIds: [...activePrinterProfile.categoryIds, categoryId],
+    setPrinterDraftProfile((draft) => {
+      const baseDraft = draft ?? createPrinterEditDraft(baseProfile)
+      return {
+        ...baseDraft,
+        categoryIds: uniqueStrings([...baseDraft.categoryIds, categoryId]),
+        updatedAt: new Date().toISOString(),
+      }
     })
     setPrinterRouteCategoryId('')
-    setPrinterStatus(`${getCategoryDisplayLabel(categoryId, categoryList)} routed to ${activePrinterProfile.name}`)
+    setPrinterStatus(`${getCategoryDisplayLabel(categoryId, categoryList)} added. Press Save to apply.`)
   }
 
   function toggleActivePrinterTableGroup(groupId: string) {
-    if (!activePrinterProfile) {
+    const baseProfile = activePrinterDraft ?? activePrinterProfile
+    if (!baseProfile) {
       return
     }
 
-    const nextTableGroupIds = activePrinterProfile.tableGroupIds.includes(groupId)
-      ? activePrinterProfile.tableGroupIds.filter((id) => id !== groupId)
-      : [...activePrinterProfile.tableGroupIds, groupId]
+    const nextTableGroupIds = baseProfile.tableGroupIds.includes(groupId)
+      ? baseProfile.tableGroupIds.filter((id) => id !== groupId)
+      : [...baseProfile.tableGroupIds, groupId]
 
-    updatePrinterProfileRoutes(activePrinterProfile.id, { tableGroupIds: nextTableGroupIds })
+    setPrinterDraftProfile((draft) => {
+      const baseDraft = draft ?? createPrinterEditDraft(baseProfile)
+      return { ...baseDraft, tableGroupIds: uniqueStrings(nextTableGroupIds), updatedAt: new Date().toISOString() }
+    })
   }
 
-  function addPrinterProfile() {
-    const name = printerProfileName.trim()
-    if (!name) {
-      setPrinterStatus('Enter printer name')
+  function addActivePrinterTableGroupRoute() {
+    const baseProfile = activePrinterDraft ?? activePrinterProfile
+    if (!baseProfile) {
       return
     }
 
-    if (!printerProfileDeviceName) {
-      setPrinterStatus('Select installed printer')
+    const groupId =
+      printerRouteTableGroupId ||
+      diningTableGroups.find((group) => !baseProfile.tableGroupIds.includes(group.id))?.id ||
+      ''
+
+    if (!groupId) {
+      setPrinterStatus('No table group available to add')
       return
     }
 
-    const profile: PrinterProfile = {
-      id: createPrinterProfileId(),
-      name,
-      settings: normalizePrinterSettings({
-        ...defaultPrinterSettings,
-        deviceName: printerProfileDeviceName,
-      }),
-      categoryIds: [],
-      tableGroupIds: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+    if (baseProfile.tableGroupIds.includes(groupId)) {
+      setPrinterStatus(`${diningTableGroups.find((group) => group.id === groupId)?.label || 'Table group'} already added`)
+      return
     }
 
-    setPrinterProfiles((profiles) => [...profiles, profile])
-    setActivePrinterProfileId(profile.id)
-    setPrinterProfileName('')
-    setPrinterProfileDeviceName('')
-    setPrinterStatus(`${profile.name} added. Configure KOT categories next.`)
-    setActiveView('printer_config')
+    setPrinterDraftProfile((draft) => {
+      const baseDraft = draft ?? createPrinterEditDraft(baseProfile)
+      return {
+        ...baseDraft,
+        tableGroupIds: uniqueStrings([...baseDraft.tableGroupIds, groupId]),
+        updatedAt: new Date().toISOString(),
+      }
+    })
+    setPrinterRouteTableGroupId('')
+    setPrinterStatus(`${diningTableGroups.find((group) => group.id === groupId)?.label || 'Table group'} added. Press Save to apply.`)
   }
 
   function openNewPrinterConfiguration() {
@@ -5218,69 +5510,127 @@ function App() {
       updatedAt: new Date().toISOString(),
     }
 
-    setPrinterProfiles((profiles) => [...profiles, profile])
     setActivePrinterProfileId(profile.id)
+    setPrinterDraftProfile(createPrinterEditDraft(profile))
     setPendingNewPrinterId(profile.id)
     setPrinterRouteCategoryId('')
-    setPrinterStatus('Configure printer details and press Save Printer')
+    setPrinterRouteTableGroupId('')
+    setPrinterStatus('Configure printer details and press Save')
     setActiveView('printer_config')
   }
 
   function closePrinterConfiguration() {
-    if (pendingNewPrinterId) {
-      setPrinterProfiles((profiles) => profiles.filter((profile) => profile.id !== pendingNewPrinterId))
+    if (pendingNewPrinterId || printerDraftProfile) {
       setActivePrinterProfileId(billPrinterProfile?.id ?? defaultBillPrinterProfileId)
       setPendingNewPrinterId('')
-      setPrinterStatus('New printer setup cancelled')
+      setPrinterDraftProfile(null)
+      setPrinterRouteCategoryId('')
+      setPrinterRouteTableGroupId('')
+      setPrinterStatus(pendingNewPrinterId ? 'New printer setup cancelled' : 'Printer changes discarded')
     }
 
     setActiveView('printers')
   }
 
   function saveActivePrinterProfile() {
-    if (!activePrinterProfile) {
+    const profileToSave = printerDraftProfile ?? activePrinterProfile
+    if (!profileToSave) {
       setPrinterStatus('Select printer profile')
       return
     }
 
-    const name = activePrinterProfile.name.trim()
+    const name = profileToSave.name.trim()
     if (!name) {
       setPrinterStatus('Enter printer name')
       return
     }
 
-    if (activePrinterSettings.mode === 'system' && !activePrinterSettings.deviceName) {
+    if (!activePrinterSettings.deviceName) {
       setPrinterStatus('Select installed printer')
       return
     }
 
-    if (activePrinterSettings.mode === 'network' && !activePrinterSettings.ipAddress.trim()) {
-      setPrinterStatus('Enter LAN printer IP address')
-      return
-    }
-
     setPrinterProfiles((profiles) =>
-      profiles.map((profile) =>
-        profile.id === activePrinterProfile.id ? { ...profile, name, updatedAt: new Date().toISOString() } : profile,
-      ),
+      profiles.some((profile) => profile.id === profileToSave.id)
+        ? profiles.map((profile) =>
+            profile.id === profileToSave.id
+              ? {
+                  ...profileToSave,
+                  name,
+                  settings: normalizePrinterSettings({
+                    ...profileToSave.settings,
+                    mode: 'system',
+                    printMethod: 'driver',
+                  }),
+                  categoryIds: uniqueStrings(profileToSave.categoryIds),
+                  tableGroupIds: uniqueStrings(profileToSave.tableGroupIds),
+                  updatedAt: new Date().toISOString(),
+                }
+              : profile,
+          )
+        : [
+            ...profiles,
+            {
+              ...profileToSave,
+              name,
+              settings: normalizePrinterSettings({
+                ...profileToSave.settings,
+                mode: 'system',
+                printMethod: 'driver',
+              }),
+              categoryIds: uniqueStrings(profileToSave.categoryIds),
+              tableGroupIds: uniqueStrings(profileToSave.tableGroupIds),
+              updatedAt: new Date().toISOString(),
+            },
+          ],
     )
+    setActivePrinterProfileId(profileToSave.id)
+    setPrinterDraftProfile(null)
     setPendingNewPrinterId('')
     setPrinterStatus(`${name} printer saved`)
     setActiveView('printers')
   }
 
   function deleteActivePrinterProfile() {
-    if (!activePrinterProfile || activePrinterProfile.id === billPrinterProfile?.id) {
+    const profileToDelete = activePrinterDraft ?? activePrinterProfile
+    if (!profileToDelete) {
+      setPrinterStatus('Select printer profile')
+      return
+    }
+
+    if (pendingNewPrinterId === profileToDelete.id) {
+      setPrinterDraftProfile(null)
+      setPendingNewPrinterId('')
+      setActivePrinterProfileId(billPrinterProfile?.id ?? defaultBillPrinterProfileId)
+      setPrinterStatus('New printer setup cancelled')
+      setActiveView('printers')
+      return
+    }
+
+    deletePrinterProfile(profileToDelete.id)
+  }
+
+  function deletePrinterProfile(profileId: string) {
+    const profileToDelete = printerProfiles.find((profile) => profile.id === profileId)
+    if (!profileToDelete || profileToDelete.id === billPrinterProfile?.id) {
       setPrinterStatus('Bill printer profile cannot be deleted')
       return
     }
 
-    setPrinterProfiles((profiles) => profiles.filter((profile) => profile.id !== activePrinterProfile.id))
+    if (!window.confirm(`Remove printer "${profileToDelete.name}"?`)) {
+      return
+    }
+
+    setPrinterProfiles((profiles) => profiles.filter((profile) => profile.id !== profileToDelete.id))
     setActivePrinterProfileId(billPrinterProfile?.id ?? defaultBillPrinterProfileId)
-    if (pendingNewPrinterId === activePrinterProfile.id) {
+    if (pendingNewPrinterId === profileToDelete.id) {
       setPendingNewPrinterId('')
     }
-    setPrinterStatus(`${activePrinterProfile.name} printer profile deleted`)
+    if (printerDraftProfile?.id === profileToDelete.id) {
+      setPrinterDraftProfile(null)
+      setActiveView('printers')
+    }
+    setPrinterStatus(`${profileToDelete.name} printer profile removed`)
   }
 
   async function printReceipt(saveBeforePrint = true) {
@@ -5369,7 +5719,7 @@ function App() {
   }
 
   async function printKot(profileId: string, kotItems = cart) {
-    const profile = printerProfiles.find((savedProfile) => savedProfile.id === profileId)
+    const profile = profileId === activePrinterDraft?.id ? activePrinterDraft : printerProfiles.find((savedProfile) => savedProfile.id === profileId)
     if (!profile) {
       setPrinterStatus('Select printer profile')
       return
@@ -5455,13 +5805,13 @@ function App() {
     }
   }
 
-  async function testPrinter(profileId = activePrinterProfile?.id) {
+  async function testPrinter(profileId = activePrinterDraft?.id) {
     if (!window.posPrinter) {
       setPrinterStatus('Run inside desktop app for printers')
       return
     }
 
-    const profile = printerProfiles.find((savedProfile) => savedProfile.id === profileId)
+    const profile = profileId === activePrinterDraft?.id ? activePrinterDraft : printerProfiles.find((savedProfile) => savedProfile.id === profileId)
     if (!profile) {
       setPrinterStatus('Select printer profile')
       return
@@ -5476,7 +5826,7 @@ function App() {
     }
   }
 
-  async function testKotPrinter(profileId = activePrinterProfile?.id) {
+  async function testKotPrinter(profileId = activePrinterDraft?.id) {
     if (!window.posPrinter) {
       setPrinterStatus('Run inside desktop app for printers')
       return
@@ -5508,16 +5858,36 @@ function App() {
       .map((group) => group.id)
     const fallbackProfile = billPrinterProfile ?? printerProfiles[0]
 
+    function findBestRouteProfile(categoryId: string) {
+      let bestProfile: PrinterProfile | undefined
+      let bestScore = 0
+
+      printerProfiles.forEach((profile) => {
+        if (!profile.categoryIds.includes(categoryId)) {
+          return
+        }
+
+        const hasTableGroupRule = profile.tableGroupIds.length > 0
+        const tableGroupMatches =
+          !hasTableGroupRule || profile.tableGroupIds.some((groupId) => currentTableGroupIds.includes(groupId))
+
+        if (!tableGroupMatches) {
+          return
+        }
+
+        const score = hasTableGroupRule ? 2 : 1
+        if (score > bestScore) {
+          bestProfile = profile
+          bestScore = score
+        }
+      })
+
+      return bestProfile
+    }
+
     kotItems.forEach((line) => {
       const categoryId = getCartLineCategoryId(line, menuList)
-      const matchingProfile =
-        printerProfiles.find((profile) => {
-          const categoryMatches = profile.categoryIds.includes(categoryId)
-          const tableGroupMatches =
-            profile.tableGroupIds.length === 0 ||
-            profile.tableGroupIds.some((groupId) => currentTableGroupIds.includes(groupId))
-          return categoryMatches && tableGroupMatches
-        }) ?? fallbackProfile
+      const matchingProfile = findBestRouteProfile(categoryId) ?? fallbackProfile
 
       if (!matchingProfile) {
         return
@@ -6150,6 +6520,7 @@ function App() {
             <button className="tool-button" type="button" title="Orders" onClick={() => openOrderList('orders')}>
               <ReceiptText size={16} />
               Orders
+              {renderShortcutKey('pos-orders')}
             </button>
             {hasCloudFeatureAccess && hasGoldLocalPlan && (
               <button
@@ -6170,6 +6541,7 @@ function App() {
             <button className="new-order" type="button" onClick={newOrder}>
               <Plus size={17} />
               New Order
+              {renderShortcutKey('pos-new-order')}
             </button>
           </div>
         ) : (
@@ -6191,6 +6563,7 @@ function App() {
                 >
                   <ShoppingCart size={17} />
                   POS Sale
+                  {renderShortcutKey('home-pos')}
                 </button>
               )}
               {hasSubscriptionAccess && hasPermission('reports') && (
@@ -6201,6 +6574,7 @@ function App() {
                 >
                   <BarChart3 size={17} />
                   Report
+                  {renderShortcutKey('home-report')}
                 </button>
               )}
               {hasSubscriptionAccess && hasPermission('expense_manage') && (
@@ -6213,26 +6587,6 @@ function App() {
                   Expense
                 </button>
               )}
-              {hasSubscriptionAccess && hasPermission('menu_manage') && (
-                <button
-                  className={activeView === 'menu' ? 'view-tab utility-tab active' : 'view-tab utility-tab'}
-                  type="button"
-                  onClick={openMenuSetup}
-                >
-                  <Pencil size={17} />
-                  Menu Setup
-                </button>
-              )}
-              {hasSubscriptionAccess && hasPermission('printer_manage') && (
-                <button
-                  className={activeView === 'printers' ? 'view-tab utility-tab active' : 'view-tab utility-tab'}
-                  type="button"
-                  onClick={openPrinterManager}
-                >
-                  <Printer size={17} />
-                  Printer Manage
-                </button>
-              )}
               <button
                 className={activeView === 'about' ? 'view-tab active' : 'view-tab'}
                 type="button"
@@ -6243,33 +6597,20 @@ function App() {
               </button>
             </nav>
             <button
-              className={
-                activeView === 'profile' || activeView === 'sync' || activeView === 'users'
-                  ? 'theme-toggle user-lock-button active'
-                  : 'theme-toggle user-lock-button'
-              }
+              className="theme-toggle"
               type="button"
-              title="Account"
-              onClick={openAccountPanel}
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              onClick={() => setTheme((mode) => (mode === 'dark' ? 'light' : 'dark'))}
             >
-              <User size={17} />
-              Account
+              {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+              {theme === 'dark' ? 'Light' : 'Dark'}
+              {renderShortcutKey('global-theme')}
             </button>
             <button className="theme-toggle user-lock-button" type="button" title="Lock app" onClick={lockApp}>
               <span className="user-name">{currentUser?.name || 'User'}</span>
               <LogOut size={17} />
+              {renderShortcutKey('global-lock')}
             </button>
-            {activeView === 'home' && (
-              <button
-                className="theme-toggle"
-                type="button"
-                title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-                onClick={() => setTheme((mode) => (mode === 'dark' ? 'light' : 'dark'))}
-              >
-                {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
-                {theme === 'dark' ? 'Light' : 'Dark'}
-              </button>
-            )}
           </div>
         )}
       </header>
@@ -6307,6 +6648,7 @@ function App() {
               <ShoppingCart size={34} />
               <strong>POS Sale</strong>
               <span>Billing screen</span>
+              {renderShortcutKey('home-pos')}
             </button>
             )}
             {hasSubscriptionAccess && hasPermission('reports') && (
@@ -6314,6 +6656,7 @@ function App() {
               <BarChart3 size={34} />
               <strong>Report</strong>
               <span>Sales graph and bills</span>
+              {renderShortcutKey('home-report')}
             </button>
             )}
             {hasSubscriptionAccess && hasPermission('expense_manage') && (
@@ -6323,39 +6666,17 @@ function App() {
               <span>Cash and bank outflow</span>
             </button>
             )}
-            {hasSubscriptionAccess && hasPermission('menu_manage') && (
-            <button className="home-launch-tile" type="button" onClick={openMenuSetup}>
-              <Pencil size={34} />
-              <strong>Menu Setup</strong>
-              <span>Categories and items</span>
-            </button>
-            )}
-            {hasSubscriptionAccess && hasPermission('menu_manage') && (
-            <button className="home-launch-tile" type="button" onClick={openTableSetup}>
-              <UtensilsCrossed size={34} />
-              <strong>Table Setup</strong>
-              <span>Dining tables</span>
-            </button>
-            )}
-            {hasSubscriptionAccess && hasPermission('printer_manage') && (
-            <button className="home-launch-tile" type="button" onClick={openPrinterManager}>
-              <Printer size={34} />
-              <strong>Printer Manage</strong>
-              <span>Bill and KOT printers</span>
-            </button>
-            )}
-            {hasSubscriptionAccess && hasPermission('user_manage') && (
-            <button className="home-launch-tile" type="button" onClick={() => goToView('service_staff')}>
-              <User size={34} />
-              <strong>Staff</strong>
-              <span>Service staff codes</span>
-            </button>
-            )}
-            {hasSubscriptionAccess && hasPermission('user_manage') && (
+            {hasSubscriptionAccess &&
+              (hasPermission('user_manage') ||
+                hasPermission('business_profile') ||
+                hasPermission('menu_manage') ||
+                hasPermission('printer_manage') ||
+                (hasCloudFeatureAccess && hasPermission('cloud_sync'))) && (
             <button className="home-launch-tile" type="button" onClick={() => goToView('settings')}>
               <Settings size={34} />
               <strong>Settings</strong>
               <span>App configuration</span>
+              {renderShortcutKey('home-settings')}
             </button>
             )}
             {hasSubscriptionAccess && hasCloudFeatureAccess && hasPermission('cloud_sync') && hasGoldLocalPlan && (
@@ -6363,13 +6684,6 @@ function App() {
               <Monitor size={34} />
               <strong>Local Server</strong>
               <span>Main PC LAN access</span>
-            </button>
-            )}
-            {(hasPermission('business_profile') || (hasCloudFeatureAccess && hasPermission('cloud_sync')) || hasPermission('user_manage')) && (
-            <button className="home-launch-tile" type="button" onClick={openAccountPanel}>
-              <User size={34} />
-              <strong>Account</strong>
-              <span>{hasOfflineAccess ? 'Profile and users' : 'Profile, sync, and users'}</span>
             </button>
             )}
           </div>
@@ -6396,6 +6710,48 @@ function App() {
               <strong>Configuration</strong>
               <span>Sale flow and app behavior</span>
             </button>
+            {hasSubscriptionAccess && hasPermission('user_manage') && (
+              <button className="home-launch-tile settings-launch-tile" type="button" onClick={() => goToView('keyboard_shortcuts')}>
+                <Keyboard size={34} />
+                <strong>Keyboard Shortcuts</strong>
+                <span>View and manage shortcut keys</span>
+              </button>
+            )}
+            {hasSubscriptionAccess && hasPermission('menu_manage') && (
+              <button className="home-launch-tile settings-launch-tile" type="button" onClick={openMenuSetup}>
+                <Pencil size={34} />
+                <strong>Menu Setup</strong>
+                <span>Categories and items</span>
+              </button>
+            )}
+            {hasSubscriptionAccess && hasPermission('menu_manage') && (
+              <button className="home-launch-tile settings-launch-tile" type="button" onClick={openTableSetup}>
+                <UtensilsCrossed size={34} />
+                <strong>Table Setup</strong>
+                <span>Dining tables</span>
+              </button>
+            )}
+            {hasSubscriptionAccess && hasPermission('printer_manage') && (
+              <button className="home-launch-tile settings-launch-tile" type="button" onClick={openPrinterManager}>
+                <Printer size={34} />
+                <strong>Printer Manage</strong>
+                <span>Bill and KOT printers</span>
+              </button>
+            )}
+            {(hasPermission('business_profile') || (hasCloudFeatureAccess && hasPermission('cloud_sync')) || hasPermission('user_manage')) && (
+              <button className="home-launch-tile settings-launch-tile" type="button" onClick={openAccountPanel}>
+                <User size={34} />
+                <strong>Account</strong>
+                <span>{hasOfflineAccess ? 'Profile and users' : 'Profile, sync, and users'}</span>
+              </button>
+            )}
+            {hasSubscriptionAccess && hasPermission('user_manage') && (
+              <button className="home-launch-tile settings-launch-tile" type="button" onClick={() => goToView('service_staff')}>
+                <User size={34} />
+                <strong>Staff</strong>
+                <span>Service staff codes</span>
+              </button>
+            )}
           </div>
         </section>
       )}
@@ -6464,6 +6820,101 @@ function App() {
               </div>
             </section>
           </div>
+        </section>
+      )}
+
+      {activeView === 'keyboard_shortcuts' && (
+        <section className="keyboard-shortcuts-view page-view">
+          <div className="page-head">
+            <div>
+              <span>Settings</span>
+              <h1>Keyboard Shortcuts</h1>
+              <p>Enable shortcuts and manage the assigned keys for daily POS actions</p>
+            </div>
+            <div className="page-head-actions">
+              <button
+                className="home-action"
+                type="button"
+                onClick={() => {
+                  setKeyboardShortcutOverrides({})
+                  setPrinterStatus('Keyboard shortcuts reset to default')
+                }}
+              >
+                <RefreshCw size={18} />
+                Reset
+              </button>
+              <button className="home-action" type="button" onClick={() => goToView('settings')}>
+                <Settings size={18} />
+                Settings
+              </button>
+            </div>
+          </div>
+
+          <section className="home-card shortcut-manager-card">
+            <label className="configuration-option shortcut-master-option">
+              <input
+                type="checkbox"
+                checked={keyboardShortcutsEnabled}
+                onChange={(event) => setKeyboardShortcutsEnabled(event.currentTarget.checked)}
+              />
+              <div>
+                <strong>Enable Keyboard Shortcuts</strong>
+                <span>
+                  {keyboardShortcutsEnabled
+                    ? 'Shortcut keys are active. Hold Alt on other screens to reveal the assigned keys.'
+                    : 'Shortcut execution and Alt key hints are disabled.'}
+                </span>
+              </div>
+            </label>
+            <div className="section-title">
+              <div>
+                <strong>Assigned Shortcuts</strong>
+                <span>Click a key field, then press the replacement key</span>
+              </div>
+            </div>
+
+            <div className="shortcut-manager-list">
+              {keyboardShortcuts.map((shortcut) => (
+                <div className="shortcut-manager-row" key={shortcut.id}>
+                  <div>
+                    <span>{getShortcutScopeLabel(shortcut.scope)}</span>
+                    <strong>{shortcut.action}</strong>
+                    <small>{shortcut.description}</small>
+                  </div>
+                  <input
+                    aria-label={`${shortcut.action} shortcut key`}
+                    value={shortcut.key}
+                    onChange={() => undefined}
+                    onKeyDown={(event) => {
+                      event.preventDefault()
+                      const nextKey = normalizeShortcutKey(event.key)
+                      if (!nextKey) {
+                        return
+                      }
+                      const shortcutConflict = keyboardShortcuts.find(
+                        (entry) =>
+                          entry.id !== shortcut.id &&
+                          doShortcutScopesOverlap(entry.scope, shortcut.scope) &&
+                          isShortcutKeyMatch(entry.key, nextKey),
+                      )
+                      if (shortcutConflict) {
+                        setPrinterStatus(`${nextKey} is already used for ${shortcutConflict.action}`)
+                        return
+                      }
+                      setKeyboardShortcutOverrides((overrides) =>
+                        normalizeKeyboardShortcutOverrides({
+                          ...overrides,
+                          [shortcut.id]: nextKey,
+                        }),
+                      )
+                      setPrinterStatus(`${shortcut.action} shortcut set to ${nextKey}`)
+                    }}
+                    onFocus={(event) => event.currentTarget.select()}
+                  />
+                </div>
+              ))}
+            </div>
+          </section>
         </section>
       )}
 
@@ -8454,23 +8905,28 @@ function App() {
               <div className="right-actions">
                 <button className="action warn" type="button" onClick={holdCurrentOrder}>
                   <Clock3 size={18} />
-                  Hold
+                  <span>Hold</span>
+                  {renderShortcutKey('pos-hold')}
+                </button>
+                <button className="action primary print-primary-action" type="button" onClick={() => printReceipt(true)}>
+                  <ReceiptText size={18} />
+                  <span>Print Bill</span>
+                  {renderShortcutKey('pos-print-bill')}
                 </button>
                 <button className="action success" type="button" onClick={savePaidOrder}>
                   <Save size={18} />
-                  Save Bill
+                  <span>Save Bill</span>
+                  {renderShortcutKey('pos-save-bill')}
                 </button>
                 <button className="action kot" type="button" onClick={printKotByRouting}>
                   <Printer size={18} />
-                  Print KOT
+                  <span>Print KOT</span>
+                  {renderShortcutKey('pos-kot')}
                 </button>
                 <button className="action primary" type="button" onClick={() => printReceipt(true)}>
                   <Printer size={18} />
-                  Save & Print
-                </button>
-                <button className="action dark" type="button" onClick={() => printReceipt(false)}>
-                  <ReceiptText size={18} />
-                  Print Bill
+                  <span>Save & Print</span>
+                  {renderShortcutKey('pos-save-print')}
                 </button>
               </div>
             </div>
@@ -10133,36 +10589,75 @@ function App() {
                 </div>
               </div>
 
-              <div className="printer-card-grid">
-                {printerProfiles.map((profile) => (
-                  <article className="printer-summary-card minimal" key={profile.id}>
-                    <div className="printer-summary-top">
-                      <div className="printer-summary-icon">
-                        <Printer size={20} />
-                      </div>
-                      <strong>{profile.name || 'Printer Profile'}</strong>
-                    </div>
+              <div className="printer-review-list">
+                {printerProfiles.map((profile) => {
+                  const categoryLabels = getPrinterCategoryLabels(profile, categoryList)
+                  const tableGroupLabels = getPrinterTableGroupLabels(profile, diningTableGroups)
+                  const isBillDefault = profile.id === billPrinterProfile?.id
 
-                    <div className="printer-summary-actions">
-                      <button
-                        className="small-button"
-                        type="button"
-                        onClick={() => {
-                          setActivePrinterProfileId(profile.id)
-                          setPendingNewPrinterId('')
-                          setActiveView('printer_config')
-                        }}
-                      >
-                        <Pencil size={16} />
-                        Edit
-                      </button>
-                      <button className="small-button" type="button" onClick={() => testPrinter(profile.id)}>
-                        <Printer size={16} />
-                        Test Print
-                      </button>
-                    </div>
-                  </article>
-                ))}
+                  return (
+                    <article className="printer-review-row" key={profile.id}>
+                      <div className="printer-review-main">
+                        <div className="printer-summary-icon">
+                          <Printer size={20} />
+                        </div>
+                        <div>
+                          <div className="printer-review-title">
+                            <strong>{profile.name || 'Printer Profile'}</strong>
+                            {isBillDefault && <span>Bill default</span>}
+                          </div>
+                          <p>{describePrinterSettings(profile.settings)}</p>
+                        </div>
+                      </div>
+
+                      <div className="printer-review-tags">
+                        <span>{profile.settings.deviceName || 'Select printer'}</span>
+                        <span>POS {profile.settings.paperWidth || '80'}mm</span>
+                        <span>{categoryLabels.length ? `${categoryLabels.length} KOT group(s)` : 'No KOT route'}</span>
+                        <span>{tableGroupLabels.length ? tableGroupLabels.join(', ') : 'All tables'}</span>
+                      </div>
+
+                      <div className="printer-review-actions">
+                        <button
+                          className="small-button icon-only"
+                          type="button"
+                          title="Edit printer"
+                          aria-label={`Edit ${profile.name || 'printer'}`}
+                          onClick={() => {
+                            setActivePrinterProfileId(profile.id)
+                            setPrinterDraftProfile(createPrinterEditDraft(profile))
+                            setPendingNewPrinterId('')
+                            setPrinterRouteCategoryId('')
+                            setPrinterRouteTableGroupId('')
+                            setActiveView('printer_config')
+                          }}
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button
+                          className="small-button icon-only"
+                          type="button"
+                          title="Test print"
+                          aria-label={`Test ${profile.name || 'printer'}`}
+                          onClick={() => testPrinter(profile.id)}
+                        >
+                          <Printer size={16} />
+                        </button>
+                        {profile.id !== billPrinterProfile?.id && (
+                          <button
+                            className="small-button danger icon-only"
+                            type="button"
+                            title="Remove printer"
+                            aria-label={`Remove ${profile.name || 'printer'}`}
+                            onClick={() => deletePrinterProfile(profile.id)}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </div>
+                    </article>
+                  )
+                })}
               </div>
             </section>
           </div>
@@ -10174,58 +10669,55 @@ function App() {
           <div className="page-head">
             <div>
               <span>Printer</span>
-              <h1>{activePrinterProfile?.name || 'Printer Configuration'}</h1>
+              <h1>{activePrinterDraft?.name || 'Printer Configuration'}</h1>
               <p>Configure printer device, receipt size, KOT categories, and table groups</p>
             </div>
-            <button className="home-action" type="button" onClick={closePrinterConfiguration}>
-              <Printer size={18} />
-              Cancel
-            </button>
+            <div className="page-head-actions">
+              <button className="home-action primary" type="button" onClick={saveActivePrinterProfile}>
+                <Save size={18} />
+                Save
+              </button>
+              <button className="home-action" type="button" onClick={closePrinterConfiguration}>
+                <X size={18} />
+                Close
+              </button>
+            </div>
           </div>
 
           <div className="printer-config-layout">
-            <section className="printer-profile-editor home-card">
+            <section className="printer-setup-card home-card">
               <div className="section-title">
                 <div>
-                  <strong>Printer Details</strong>
-                  <span>{activePrinterProfile?.id === billPrinterProfile?.id ? 'Default bill printer' : 'Printer profile'}</span>
+                  <strong>1. Printer Details</strong>
+                  <span>Name the profile, choose the Windows printer, and set paper width</span>
                 </div>
               </div>
 
-              <label className="dialog-field">
-                Printer Name
-                <input
-                  value={activePrinterProfile?.name ?? ''}
-                  onChange={(event) => updateActivePrinterProfileName(event.target.value)}
-                />
-              </label>
+              <div className="printer-details-grid">
+                <label className="dialog-field">
+                  Printer Name
+                  <input
+                    value={activePrinterDraft?.name ?? ''}
+                    onChange={(event) => updateActivePrinterProfileName(event.target.value)}
+                  />
+                </label>
 
-              <div className="segmented">
-                <button
-                  className={activePrinterSettings.mode === 'system' ? 'active' : ''}
-                  type="button"
-                  onClick={() => updateActivePrinterProfileSettings({ mode: 'system' })}
-                >
-                  <Monitor size={17} />
-                  Windows / USB
-                </button>
-                <button
-                  className={activePrinterSettings.mode === 'network' ? 'active' : ''}
-                  type="button"
-                  onClick={() => updateActivePrinterProfileSettings({ mode: 'network' })}
-                >
-                  <Wifi size={17} />
-                  LAN ESC/POS
-                </button>
-              </div>
-
-              {activePrinterSettings.mode === 'system' ? (
-                <div className="panel-grid">
+                <div className="printer-install-panel compact">
+                  <div className="method-panel-head">
+                    <strong>Installed Windows Printer</strong>
+                    <span>Select the exact printer queue from Windows. Press Refresh after adding or renaming a printer.</span>
+                  </div>
+                  <div className="panel-grid compact">
                   <label>
-                    Installed Printer
                     <select
                       value={activePrinterSettings.deviceName}
-                      onChange={(event) => updateActivePrinterProfileSettings({ deviceName: event.target.value })}
+                      onChange={(event) =>
+                        updateActivePrinterProfileSettings({
+                          deviceName: event.target.value,
+                          mode: 'system',
+                          printMethod: 'driver',
+                        })
+                      }
                     >
                       <option value="">Select printer</option>
                       {printers.map((printer) => (
@@ -10240,60 +10732,29 @@ function App() {
                     <RefreshCw size={16} />
                     Refresh
                   </button>
+                  </div>
                 </div>
-              ) : (
-                <div className="panel-grid two">
-                  <label>
-                    Printer IP
-                    <input
-                      value={activePrinterSettings.ipAddress}
-                      onChange={(event) => updateActivePrinterProfileSettings({ ipAddress: event.target.value })}
-                    />
-                  </label>
-                  <label>
-                    Port
-                    <input
-                      value={activePrinterSettings.port}
-                      onChange={(event) => updateActivePrinterProfileSettings({ port: event.target.value })}
-                    />
-                  </label>
-                </div>
-              )}
 
-              <div className="paper-row">
-                <span>Paper Width</span>
-                <button
-                  className={activePrinterSettings.paperWidth === '80' ? 'active' : ''}
-                  type="button"
-                  onClick={() => updateActivePrinterProfileSettings({ paperWidth: '80' })}
-                >
-                  POS 80mm
-                </button>
-                <button
-                  className={activePrinterSettings.paperWidth === '58' ? 'active' : ''}
-                  type="button"
-                  onClick={() => updateActivePrinterProfileSettings({ paperWidth: '58' })}
-                >
-                  POS 58mm
-                </button>
+                <div className="paper-row compact">
+                  <span>Paper Width</span>
+                  <button
+                    className={activePrinterSettings.paperWidth === '80' ? 'active' : ''}
+                    type="button"
+                    onClick={() => updateActivePrinterProfileSettings({ paperWidth: '80' })}
+                  >
+                    POS 80mm
+                  </button>
+                  <button
+                    className={activePrinterSettings.paperWidth === '58' ? 'active' : ''}
+                    type="button"
+                    onClick={() => updateActivePrinterProfileSettings({ paperWidth: '58' })}
+                  >
+                    POS 58mm
+                  </button>
+                </div>
               </div>
 
               <div className="panel-actions">
-                {activePrinterProfile?.id !== billPrinterProfile?.id && (
-                  <button
-                    className="small-button"
-                    type="button"
-                    onClick={() => {
-                      if (activePrinterProfile) {
-                        setBillPrinterProfileId(activePrinterProfile.id)
-                        setPrinterStatus(`${activePrinterProfile.name} set as bill printer`)
-                      }
-                    }}
-                  >
-                    <ReceiptText size={16} />
-                    Use for Bill
-                  </button>
-                )}
                 <button className="small-button" type="button" onClick={() => testPrinter()}>
                   <Printer size={16} />
                   Test Print
@@ -10302,35 +10763,57 @@ function App() {
                   <Printer size={16} />
                   Test KOT
                 </button>
-                {activePrinterProfile?.id !== billPrinterProfile?.id && (
-                  <button className="small-button danger" type="button" onClick={deleteActivePrinterProfile}>
-                    <Trash2 size={16} />
-                    Delete
+                {!pendingNewPrinterId && activePrinterDraft?.id !== billPrinterProfile?.id && (
+                  <button
+                    className="small-button"
+                    type="button"
+                    onClick={() => {
+                      if (activePrinterDraft) {
+                        setBillPrinterProfileId(activePrinterDraft.id)
+                        setPrinterStatus(`${activePrinterDraft.name} set as bill printer`)
+                      }
+                    }}
+                  >
+                    <ReceiptText size={16} />
+                    Use for Bill
                   </button>
                 )}
-                <button className="small-button primary" type="button" onClick={saveActivePrinterProfile}>
-                  <Save size={16} />
-                  Save Printer
-                </button>
+                {activePrinterDraft?.id !== billPrinterProfile?.id && (
+                  <button className="small-button danger" type="button" onClick={deleteActivePrinterProfile}>
+                    <Trash2 size={16} />
+                    Remove
+                  </button>
+                )}
               </div>
             </section>
 
-            <section className="printer-routing-card home-card">
+            <section className="printer-routing-card printer-setup-card home-card">
               <div className="section-title">
                 <div>
-                  <strong>KOT Routing</strong>
-                  <span>Send item groups to this printer automatically</span>
+                  <strong>2. KOT Routing Automation</strong>
+                  <span>Route item groups to the correct printer automatically during Print KOT</span>
                 </div>
               </div>
 
-              <div className="route-chip-summary">
+              <div className="routing-help-box">
+                <strong>How routing works</strong>
+                <span>
+                  Priority is category plus table/floor group first, then category-only routes. Items without a matching route print on the bill/default printer.
+                </span>
+              </div>
+
+              <div className="routing-priority-grid">
                 <div>
-                  <span>Categories</span>
-                  <strong>{activePrinterCategoryLabels.length ? activePrinterCategoryLabels.join(', ') : 'None selected'}</strong>
+                  <span>1</span>
+                  <strong>Category + table/floor</strong>
                 </div>
                 <div>
-                  <span>Table / Floor</span>
-                  <strong>{activePrinterTableGroupLabels.length ? activePrinterTableGroupLabels.join(', ') : 'All tables'}</strong>
+                  <span>2</span>
+                  <strong>Category only</strong>
+                </div>
+                <div>
+                  <span>3</span>
+                  <strong>Bill/default printer</strong>
                 </div>
               </div>
 
@@ -10348,7 +10831,7 @@ function App() {
                 >
                   <option value="">Select category</option>
                   {editableCategories
-                    .filter((category) => !activePrinterProfile?.categoryIds.includes(category.id))
+                    .filter((category) => !activePrinterDraft?.categoryIds.includes(category.id))
                     .map((category) => (
                       <option key={category.id} value={category.id}>
                         {category.label}
@@ -10361,17 +10844,17 @@ function App() {
                 </button>
               </div>
 
-              <div className="route-option-grid">
-                {editableCategories.map((category) => (
-                  <label className="route-check-card" key={category.id}>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(activePrinterProfile?.categoryIds.includes(category.id))}
-                      onChange={() => toggleActivePrinterCategory(category.id)}
-                    />
-                    <span>{category.label}</span>
-                  </label>
-                ))}
+              <div className="route-ticket-list">
+                {activePrinterDraft?.categoryIds.length ? (
+                  activePrinterDraft.categoryIds.map((categoryId) => (
+                    <button className="route-ticket" key={categoryId} type="button" onClick={() => toggleActivePrinterCategory(categoryId)}>
+                      <span>{getCategoryDisplayLabel(categoryId, categoryList)}</span>
+                      <X size={14} />
+                    </button>
+                  ))
+                ) : (
+                  <div className="route-empty-state">No KOT category selected.</div>
+                )}
               </div>
 
               <div className="routing-section-head">
@@ -10381,229 +10864,44 @@ function App() {
                 </div>
               </div>
 
-              <div className="route-option-grid">
-                {diningTableGroups.length ? (
-                  diningTableGroups.map((group) => (
-                    <label className="route-check-card" key={group.id}>
-                      <input
-                        type="checkbox"
-                        checked={Boolean(activePrinterProfile?.tableGroupIds.includes(group.id))}
-                        onChange={() => toggleActivePrinterTableGroup(group.id)}
-                      />
-                      <span>{group.label}</span>
-                    </label>
-                  ))
+              <div className="route-add-row">
+                <select
+                  value={printerRouteTableGroupId}
+                  onChange={(event) => setPrinterRouteTableGroupId(event.target.value)}
+                  disabled={!diningTableGroups.length}
+                >
+                  <option value="">Select table / floor group</option>
+                  {diningTableGroups
+                    .filter((group) => !activePrinterDraft?.tableGroupIds.includes(group.id))
+                    .map((group) => (
+                      <option key={group.id} value={group.id}>
+                        {group.label}
+                      </option>
+                    ))}
+                </select>
+                <button className="small-button primary" type="button" onClick={addActivePrinterTableGroupRoute}>
+                  <Plus size={16} />
+                  Add Group
+                </button>
+              </div>
+
+              <div className="route-ticket-list">
+                {activePrinterDraft?.tableGroupIds.length ? (
+                  activePrinterDraft.tableGroupIds.map((groupId) => {
+                    const groupLabel = diningTableGroups.find((group) => group.id === groupId)?.label || 'Table group'
+                    return (
+                      <button className="route-ticket" key={groupId} type="button" onClick={() => toggleActivePrinterTableGroup(groupId)}>
+                        <span>{groupLabel}</span>
+                        <X size={14} />
+                      </button>
+                    )
+                  })
                 ) : (
-                  <div className="route-empty-state">No table groups added. This printer will apply to all tables.</div>
+                  <div className="route-empty-state">All tables will use this route.</div>
                 )}
               </div>
             </section>
-          </div>
-        </section>
-      )}
 
-      {false && activeView === 'printers' && (
-        <section className="printer-manage-view page-view">
-          <div className="page-head">
-            <div>
-              <span>Printer</span>
-              <h1>Printer Manage</h1>
-              <p>Create bill, KOT, counter, USB, Windows, and LAN ESC/POS printer profiles</p>
-            </div>
-            <button className="home-action primary" type="button" onClick={refreshPrinters}>
-              <RefreshCw size={18} />
-              Refresh Printers
-            </button>
-          </div>
-
-          <div className="printer-panel full-page-panel">
-            <div className="panel-head">
-              <div>
-                <strong>Printer Manager</strong>
-                <span>Create printer profiles for bill, kitchen, juice, counter, or any section</span>
-              </div>
-            </div>
-
-            <div className="printer-manager-layout">
-              <aside className="printer-profile-sidebar">
-                <div className="printer-section-title">
-                  <strong>Profiles</strong>
-                  <span>{printerStatus}</span>
-                </div>
-
-                <div className="profile-add-row">
-                  <input
-                    placeholder="Profile name"
-                    value={printerProfileName}
-                    onChange={(event) => setPrinterProfileName(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        addPrinterProfile()
-                      }
-                    }}
-                  />
-                  <button type="button" onClick={addPrinterProfile} title="Add profile">
-                    <Plus size={17} />
-                  </button>
-                </div>
-
-                <div className="printer-profile-list">
-                  {printerProfiles.map((profile) => (
-                    <button
-                      className={activePrinterProfile?.id === profile.id ? 'active' : ''}
-                      key={profile.id}
-                      type="button"
-                      onClick={() => setActivePrinterProfileId(profile.id)}
-                    >
-                      <strong>{profile.name || 'Printer Profile'}</strong>
-                      <span>
-                        {profile.id === billPrinterProfile?.id ? 'Bill default / ' : ''}
-                        {describePrinterSettings(profile.settings)}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </aside>
-
-              <section className="printer-profile-editor">
-                <div className="printer-section-title">
-                  <strong>{activePrinterProfile?.name || 'Printer Profile'}</strong>
-                  <span>
-                    {activePrinterProfile?.id === billPrinterProfile?.id
-                      ? 'Default bill printer'
-                      : 'Printer profile'}
-                  </span>
-                </div>
-
-                <label className="dialog-field">
-                  Profile Name
-                  <input
-                    value={activePrinterProfile?.name ?? ''}
-                    onChange={(event) => updateActivePrinterProfileName(event.target.value)}
-                  />
-                </label>
-
-                <div className="segmented">
-                  <button
-                    className={activePrinterSettings.mode === 'system' ? 'active' : ''}
-                    type="button"
-                    onClick={() => updateActivePrinterProfileSettings({ mode: 'system' })}
-                  >
-                    <Monitor size={17} />
-                    Windows / USB
-                  </button>
-                  <button
-                    className={activePrinterSettings.mode === 'network' ? 'active' : ''}
-                    type="button"
-                    onClick={() => updateActivePrinterProfileSettings({ mode: 'network' })}
-                  >
-                    <Wifi size={17} />
-                    LAN ESC/POS
-                  </button>
-                </div>
-
-                {activePrinterSettings.mode === 'system' ? (
-                  <div className="panel-grid">
-                    <label>
-                      System Printer
-                      <select
-                        value={activePrinterSettings.deviceName}
-                        onChange={(event) => updateActivePrinterProfileSettings({ deviceName: event.target.value })}
-                      >
-                        <option value="">Select printer</option>
-                        {printers.map((printer) => (
-                          <option key={printer.name} value={printer.name}>
-                            {printer.displayName || printer.name}
-                            {printer.isDefault ? ' (Default)' : ''}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button type="button" className="small-button" onClick={refreshPrinters}>
-                      <RefreshCw size={16} />
-                      Refresh
-                    </button>
-                  </div>
-                ) : (
-                  <div className="panel-grid two">
-                    <label>
-                      Printer IP
-                      <input
-                        value={activePrinterSettings.ipAddress}
-                        onChange={(event) => updateActivePrinterProfileSettings({ ipAddress: event.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Port
-                      <input
-                        value={activePrinterSettings.port}
-                        onChange={(event) => updateActivePrinterProfileSettings({ port: event.target.value })}
-                      />
-                    </label>
-                  </div>
-                )}
-
-                <div className="paper-row">
-                  <span>Paper Width</span>
-                  <button
-                    className={activePrinterSettings.paperWidth === '80' ? 'active' : ''}
-                    type="button"
-                    onClick={() => updateActivePrinterProfileSettings({ paperWidth: '80' })}
-                  >
-                    POS 80mm
-                  </button>
-                  <button
-                    className={activePrinterSettings.paperWidth === '58' ? 'active' : ''}
-                    type="button"
-                    onClick={() => updateActivePrinterProfileSettings({ paperWidth: '58' })}
-                  >
-                    POS 58mm
-                  </button>
-                  <small>Receipt, report, and KOT use selected POS paper width.</small>
-                </div>
-
-                <div className="profile-status-card">
-                  <span>Bill Printer</span>
-                  <strong>{billPrinterProfile?.name || 'Bill Printer'}</strong>
-                </div>
-
-                <div className="panel-actions">
-                  {activePrinterProfile?.id !== billPrinterProfile?.id && (
-                    <button
-                      className="small-button"
-                      type="button"
-                      onClick={() => {
-                        if (activePrinterProfile) {
-                          setBillPrinterProfileId(activePrinterProfile.id)
-                          setPrinterStatus(`${activePrinterProfile.name} set as bill printer`)
-                        }
-                      }}
-                    >
-                      <ReceiptText size={16} />
-                      Use for Bill
-                    </button>
-                  )}
-                  <button className="small-button" type="button" onClick={() => testPrinter()}>
-                    <Printer size={16} />
-                    Test Print
-                  </button>
-                  <button className="small-button" type="button" onClick={() => testKotPrinter()}>
-                    <Printer size={16} />
-                    Test KOT
-                  </button>
-                  {activePrinterProfile?.id !== billPrinterProfile?.id && (
-                    <button className="small-button" type="button" onClick={deleteActivePrinterProfile}>
-                      <Trash2 size={16} />
-                      Delete
-                    </button>
-                  )}
-                  <button className="small-button primary" type="button" onClick={() => printReceipt(false)}>
-                    <ReceiptText size={16} />
-                    Print Receipt
-                  </button>
-                </div>
-              </section>
-            </div>
           </div>
         </section>
       )}
@@ -12257,6 +12555,70 @@ function normalizePaymentMethod(value: unknown): PaymentMethod {
   return 'Cash'
 }
 
+function normalizeKeyboardShortcutsEnabled(value: unknown) {
+  return value !== false && value !== 'false'
+}
+
+function normalizeShortcutKey(value: unknown) {
+  const rawKey = String(value ?? '').trim()
+  if (!rawKey || rawKey === 'Alt' || rawKey === 'Control' || rawKey === 'Shift' || rawKey === 'Meta') {
+    return ''
+  }
+
+  if (rawKey === ' ') {
+    return 'Space'
+  }
+
+  if (rawKey === 'Escape') {
+    return 'Esc'
+  }
+
+  if (rawKey === 'Enter' || rawKey === 'Tab' || rawKey === 'Backspace' || rawKey === 'Delete') {
+    return rawKey
+  }
+
+  const functionKey = rawKey.match(/^F([1-9]|1[0-2])$/i)
+  if (functionKey) {
+    return `F${functionKey[1]}`
+  }
+
+  if (/^[a-z0-9]$/i.test(rawKey)) {
+    return rawKey.toUpperCase()
+  }
+
+  return ''
+}
+
+function normalizeKeyboardShortcutOverrides(value: Record<string, string>) {
+  const overrides: Record<string, string> = {}
+  if (!value || typeof value !== 'object') {
+    return overrides
+  }
+
+  defaultKeyboardShortcuts.forEach((shortcut) => {
+    const normalizedKey = normalizeShortcutKey(value[shortcut.id])
+    if (normalizedKey) {
+      overrides[shortcut.id] = normalizedKey
+    }
+  })
+
+  return overrides
+}
+
+function isShortcutKeyMatch(shortcutKey: string, eventKey: string) {
+  return normalizeShortcutKey(eventKey) === normalizeShortcutKey(shortcutKey)
+}
+
+function doShortcutScopesOverlap(firstScope: ShortcutScope, secondScope: ShortcutScope) {
+  return firstScope === 'global' || secondScope === 'global' || firstScope === secondScope
+}
+
+function getShortcutScopeLabel(scope: ShortcutScope) {
+  if (scope === 'pos') return 'POS Sale'
+  if (scope === 'home') return 'Home'
+  return 'Global'
+}
+
 function normalizeDiscountMode(value: unknown): DiscountMode {
   return value === 'amount' ? 'amount' : 'percent'
 }
@@ -12521,7 +12883,8 @@ function normalizePrinterSettings(settings?: Partial<ReceiptPrinterSettings>): R
   const merged = { ...defaultPrinterSettings, ...(settings ?? {}) }
   return {
     ...merged,
-    mode: merged.mode === 'network' ? 'network' : 'system',
+    mode: 'system',
+    printMethod: 'driver',
     paperWidth: merged.paperWidth === '58' ? '58' : '80',
   }
 }
@@ -12557,6 +12920,15 @@ function normalizePrinterProfiles(profiles: PrinterProfile[]) {
   return profilesWithBill.filter(
     (profile, index, list) => list.findIndex((savedProfile) => savedProfile.id === profile.id) === index,
   )
+}
+
+function createPrinterEditDraft(profile: PrinterProfile): PrinterProfile {
+  return {
+    ...profile,
+    settings: normalizePrinterSettings(profile.settings),
+    categoryIds: uniqueStrings(profile.categoryIds),
+    tableGroupIds: uniqueStrings(profile.tableGroupIds),
+  }
 }
 
 function getLegacyPrinterProfiles() {
@@ -12643,11 +13015,7 @@ function hasConfiguredPrinterSettings(settings?: Partial<ReceiptPrinterSettings>
 }
 
 function describePrinterSettings(settings: ReceiptPrinterSettings) {
-  if (settings.mode === 'network') {
-    return `${settings.ipAddress || 'LAN printer'}:${settings.port || '9100'}`
-  }
-
-  return settings.deviceName || 'System printer'
+  return settings.deviceName || 'Select installed printer'
 }
 
 function titleCase(value: string) {

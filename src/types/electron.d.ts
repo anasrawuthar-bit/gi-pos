@@ -7,6 +7,7 @@ export type PrinterInfo = {
 
 export type ReceiptPrinterSettings = {
   mode: 'system' | 'network'
+  printMethod?: 'escpos' | 'driver'
   deviceName: string
   ipAddress: string
   port: string
