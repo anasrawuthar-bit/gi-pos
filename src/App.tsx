@@ -6,6 +6,7 @@ import {
   BarChart3,
   Bell,
   Building2,
+  ChevronLeft,
   Clock3,
   CreditCard,
   Flame,
@@ -1074,7 +1075,6 @@ function App() {
   const [subscriptionLock, setSubscriptionLock] = useState<SubscriptionLock | null>(null)
   const [loginCheckingCloud, setLoginCheckingCloud] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus>(defaultUpdateStatus)
-  const [accountPanelOpen, setAccountPanelOpen] = useState(false)
   const [forgotPinOpen, setForgotPinOpen] = useState(false)
   const [forgotRecoveryCode, setForgotRecoveryCode] = useState('')
   const [forgotNewPin, setForgotNewPin] = useState('')
@@ -1526,6 +1526,16 @@ function App() {
     const shortcutKey = currentShortcutKeyById.get(shortcutId)
     return shortcutHintsVisible && shortcutKey ? <kbd className="button-shortcut-key">{shortcutKey}</kbd> : null
   }
+  const renderSettingsContextBack = (sectionLabel: string) => (
+    <nav className="settings-context-nav" aria-label={`Settings / ${sectionLabel}`}>
+      <button type="button" onClick={returnToSettings}>
+        <ChevronLeft size={17} />
+        Settings
+      </button>
+      <span>/</span>
+      <strong>{sectionLabel}</strong>
+    </nav>
+  )
   const recentAuditLog = useMemo(() => auditLog.slice(0, 8), [auditLog])
   const billPrinterProfile = useMemo(
     () =>
@@ -2847,15 +2857,6 @@ function App() {
     setActiveView('home')
   }
 
-  function openAccountPanel() {
-    setAccountPanelOpen(true)
-  }
-
-  function openAccountView(view: AppView) {
-    setAccountPanelOpen(false)
-    goToView(view)
-  }
-
   async function resetPinWithRecovery() {
     const userId = loginUserId || activeStaffUsers[0]?.id || ''
     const user = activeStaffUsers.find((staffUser) => staffUser.id === userId)
@@ -3370,7 +3371,6 @@ function App() {
     setLineEditor(null)
     setPendingPriceItem(null)
     setSuccessOrder(null)
-    setAccountPanelOpen(false)
     setForgotPinOpen(false)
   }
 
@@ -4003,6 +4003,16 @@ function App() {
     setPrinterOpen(false)
     setActiveView('printers')
     refreshPrinters()
+  }
+
+  function returnToSettings() {
+    setTableSetupOpen(false)
+    setPrinterOpen(false)
+    setPrinterDraftProfile(null)
+    setPendingNewPrinterId('')
+    setPrinterRouteCategoryId('')
+    setPrinterRouteTableGroupId('')
+    goToView('settings')
   }
 
   function editTableGroup(group: DiningTableGroup) {
@@ -6738,11 +6748,25 @@ function App() {
                 <span>Bill and KOT printers</span>
               </button>
             )}
-            {(hasPermission('business_profile') || (hasCloudFeatureAccess && hasPermission('cloud_sync')) || hasPermission('user_manage')) && (
-              <button className="home-launch-tile settings-launch-tile" type="button" onClick={openAccountPanel}>
+            {hasSubscriptionAccess && hasPermission('business_profile') && (
+              <button className="home-launch-tile settings-launch-tile" type="button" onClick={() => goToView('profile')}>
+                <Building2 size={34} />
+                <strong>Business Profile</strong>
+                <span>Billing and business details</span>
+              </button>
+            )}
+            {hasCloudFeatureAccess && hasPermission('cloud_sync') && (
+              <button className="home-launch-tile settings-launch-tile" type="button" onClick={() => goToView('sync')}>
+                <Wifi size={34} />
+                <strong>Cloud Sync</strong>
+                <span>Backup and cloud connection</span>
+              </button>
+            )}
+            {hasSubscriptionAccess && hasPermission('user_manage') && (
+              <button className="home-launch-tile settings-launch-tile" type="button" onClick={() => goToView('users')}>
                 <User size={34} />
-                <strong>Account</strong>
-                <span>{hasOfflineAccess ? 'Profile and users' : 'Profile, sync, and users'}</span>
+                <strong>User Manage</strong>
+                <span>PIN and permissions</span>
               </button>
             )}
             {hasSubscriptionAccess && hasPermission('user_manage') && (
@@ -6758,16 +6782,13 @@ function App() {
 
       {activeView === 'configuration' && (
         <section className="configuration-view page-view">
+          {renderSettingsContextBack('Configuration')}
           <div className="page-head">
             <div>
               <span>Settings</span>
               <h1>Configuration</h1>
               <p>Enable or disable optional steps in daily billing</p>
             </div>
-            <button className="home-action" type="button" onClick={() => goToView('settings')}>
-              <Settings size={18} />
-              Settings
-            </button>
           </div>
 
           <div className="configuration-layout">
@@ -6825,6 +6846,7 @@ function App() {
 
       {activeView === 'keyboard_shortcuts' && (
         <section className="keyboard-shortcuts-view page-view">
+          {renderSettingsContextBack('Keyboard Shortcuts')}
           <div className="page-head">
             <div>
               <span>Settings</span>
@@ -6842,10 +6864,6 @@ function App() {
               >
                 <RefreshCw size={18} />
                 Reset
-              </button>
-              <button className="home-action" type="button" onClick={() => goToView('settings')}>
-                <Settings size={18} />
-                Settings
               </button>
             </div>
           </div>
@@ -7440,16 +7458,13 @@ function App() {
 
       {activeView === 'profile' && (
         <section className="profile-view page-view">
+          {renderSettingsContextBack('Business Profile')}
           <div className="page-head">
             <div>
               <span>Profile</span>
               <h1>Business Profile</h1>
               <p>{appName} - v{appVersion}</p>
             </div>
-            <button className="home-action primary" type="button" onClick={() => goToView('pos')}>
-              <ShoppingCart size={18} />
-              POS Sale
-            </button>
           </div>
 
           <div className="profile-layout">
@@ -7579,11 +7594,35 @@ function App() {
             </section>
 
           </div>
+
+          {((hasOfflineAccess && hasPermission('user_manage')) ||
+            (!hasOfflineAccess && hasCloudFeatureAccess && hasPermission('cloud_sync'))) && (
+            <section className="home-card account-access-card">
+              <div>
+                <span>Account Access</span>
+                <strong>{hasOfflineAccess ? 'Offline Activation' : 'Cloud Connection'}</strong>
+                <p>
+                  {hasOfflineAccess
+                    ? 'Deactivate this offline installation and return to activation login. Local restaurant data on this PC will be cleared.'
+                    : 'Terminate this PC cloud connection and return to cloud activation. Synced cloud backup remains available on the server.'}
+                </p>
+              </div>
+              <button
+                className="small-button danger account-terminate-button"
+                type="button"
+                onClick={() => void (hasOfflineAccess ? completeActivationLogout() : terminateCloudConnection())}
+              >
+                <LogOut size={16} />
+                {hasOfflineAccess ? 'Deactivate Offline' : 'Terminate Cloud'}
+              </button>
+            </section>
+          )}
         </section>
       )}
 
       {activeView === 'users' && (
         <section className="users-view page-view">
+          {renderSettingsContextBack('User Manage')}
           <div className="page-head">
             <div>
               <span>Security</span>
@@ -7725,6 +7764,7 @@ function App() {
 
       {activeView === 'service_staff' && (
         <section className="service-staff-view page-view">
+          {renderSettingsContextBack('Staff')}
           <div className="page-head">
             <div>
               <span>Staff</span>
@@ -7817,6 +7857,7 @@ function App() {
 
       {activeView === 'sync' && (
         <section className="sync-view page-view">
+          {renderSettingsContextBack('Cloud Sync')}
           <div className="page-head">
             <div>
               <span>Cloud</span>
@@ -7979,33 +8020,6 @@ function App() {
                     <small>Sync every 60 seconds after this device is connected.</small>
                   </span>
                 </label>
-                <details className="wide advanced-sync">
-                  <summary>Advanced manual credentials</summary>
-                  <div className="profile-form sync-form compact">
-                    <label>
-                      Restaurant ID
-                      <input
-                        value={cloudSyncSettings.restaurantId}
-                        onChange={(event) => updateCloudSyncSetting('restaurantId', event.target.value)}
-                      />
-                    </label>
-                    <label>
-                      Device ID
-                      <input
-                        value={cloudSyncSettings.deviceId}
-                        onChange={(event) => updateCloudSyncSetting('deviceId', event.target.value)}
-                      />
-                    </label>
-                    <label className="wide">
-                      API Key
-                      <input
-                        type="password"
-                        value={cloudSyncSettings.apiKey}
-                        onChange={(event) => updateCloudSyncSetting('apiKey', event.target.value)}
-                      />
-                    </label>
-                  </div>
-                </details>
               </div>
             </section>
 
@@ -9084,6 +9098,7 @@ function App() {
       {tableSetupOpen && (
         <div className="modal-layer" role="dialog" aria-modal="true" aria-label="Table setup">
           <div className="table-setup-panel">
+            {renderSettingsContextBack('Table Setup')}
             <div className="panel-head">
               <div>
                 <strong>Table Setup</strong>
@@ -10100,90 +10115,15 @@ function App() {
         </div>
       )}
 
-      {accountPanelOpen && currentUser && (
-        <div className="modal-layer" role="dialog" aria-modal="true" aria-label="My account">
-          <div className="quick-panel account-panel">
-            <div className="panel-head">
-              <div>
-                <strong>My Account</strong>
-                <span>{isOwnerStaffUser(currentUser) ? 'Owner account' : 'Staff account'}</span>
-              </div>
-              <button type="button" onClick={() => setAccountPanelOpen(false)} title="Close">
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="account-profile-summary">
-              <div className="account-avatar">
-                <User size={22} />
-              </div>
-              <div>
-                <strong>{currentUser.name}</strong>
-                <span>{isOwnerStaffUser(currentUser) ? 'Owner account' : 'Staff account'}</span>
-              </div>
-            </div>
-
-            <div className="account-shortcut-grid">
-              {hasSubscriptionAccess && hasPermission('business_profile') && (
-                <button type="button" onClick={() => openAccountView('profile')}>
-                  <Building2 size={20} />
-                  <span>
-                    <strong>Business Profile</strong>
-                    <small>Billing details</small>
-                  </span>
-                </button>
-              )}
-              {hasCloudFeatureAccess && hasPermission('cloud_sync') && (
-                <button type="button" onClick={() => openAccountView('sync')}>
-                  <Wifi size={20} />
-                  <span>
-                    <strong>Cloud Sync</strong>
-                    <small>Backup and devices</small>
-                  </span>
-                </button>
-              )}
-              {hasSubscriptionAccess && hasPermission('user_manage') && (
-                <button type="button" onClick={() => openAccountView('users')}>
-                  <User size={20} />
-                  <span>
-                    <strong>User Manage</strong>
-                    <small>PIN and permissions</small>
-                  </span>
-                </button>
-              )}
-            </div>
-
-            <div className="account-panel-actions">
-              {hasPermission('user_manage') && (
-                <button className="small-button danger" type="button" onClick={() => void completeActivationLogout()}>
-                  <LogOut size={16} />
-                  Complete Logout
-                </button>
-              )}
-              <button className="small-button" type="button" onClick={() => setAccountPanelOpen(false)}>
-                Close
-              </button>
-              <button className="small-button primary" type="button" onClick={lockApp}>
-                <LogOut size={16} />
-                Logout
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {activeView === 'menu' && (
         <section className="menu-setup-view page-view">
+          {renderSettingsContextBack('Menu Setup')}
           <div className="page-head">
             <div>
               <span>Menu</span>
               <h1>Menu Setup</h1>
               <p>Manage categories, item photos, prices, tax, availability, and priority order</p>
             </div>
-            <button className="home-action" type="button" onClick={() => goToView('home')}>
-              <Home size={18} />
-              Home
-            </button>
           </div>
 
           <div className="menu-editor-panel full-page-panel">
@@ -10545,6 +10485,7 @@ function App() {
 
       {activeView === 'printers' && (
         <section className="printer-manage-view page-view">
+          {renderSettingsContextBack('Printer Manage')}
           <div className="page-head">
             <div>
               <span>Printer</span>
@@ -10666,6 +10607,7 @@ function App() {
 
       {activeView === 'printer_config' && (
         <section className="printer-config-view page-view">
+          {renderSettingsContextBack(activePrinterDraft?.name || 'Printer Configuration')}
           <div className="page-head">
             <div>
               <span>Printer</span>
@@ -10903,6 +10845,7 @@ function App() {
             </section>
 
           </div>
+
         </section>
       )}
 
