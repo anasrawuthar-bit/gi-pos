@@ -1154,7 +1154,7 @@ function buildReceiptHtml(payload) {
           .items td:first-child { width: 64%; padding-right: 3px; overflow-wrap: anywhere; }
           .items td:last-child { width: 36%; text-align: right; white-space: nowrap; padding-left: 3px; }
           .items span { display: block; color: #444; margin-top: 1px; }
-          .grand td { font-size: ${paperWidth === 58 ? 11 : 14}px; font-weight: 800; border-top: 1px solid #111; padding-top: 6px; }
+          .grand td { font-size: ${paperWidth === 58 ? 16 : 20}px; font-weight: 900; border-top: 2px solid #111; padding-top: 7px; }
           .thanks { margin-top: 10px; font-weight: 700; }
         </style>
       </head>
@@ -1198,8 +1198,35 @@ function buildReportHtml(payload) {
   const paperWidth = payload?.settings?.paperWidth === '58' ? 58 : 80;
   const printableWidth = getPrintableHtmlWidthMm(paperWidth);
   const generatedAt = new Date(report.generatedAt || Date.now());
+  const options = report.printOptions || {};
+  const isEnabled = (key) => options[key] !== false;
   const orderTypeRows = (report.orderTypeRows || [])
     .map((row) => `<tr><td>${escapeHtml(row.label)} x ${Number(row.count || 0)}</td><td>${money(row.total)}</td></tr>`)
+    .join('');
+  const paymentRows = (report.paymentRows || [])
+    .map((row) => `<tr><td>${escapeHtml(row.label)}</td><td>${money(row.amount)}</td></tr>`)
+    .join('');
+  const itemRows = (report.itemRows || [])
+    .map(
+      (row) => `<tr><td>${escapeHtml(row.label)}</td><td class="qty">${Number(row.count || 0)}</td><td>${money(row.total)}</td></tr>`,
+    )
+    .join('');
+  const summaryRows = [
+    ['showTotalSales', 'Total Sales', money(report.salesTotal), 'grand'],
+    ['showAmountReceived', 'Amount Received', money(report.receivedTotal), ''],
+    ['showPaidBills', 'Paid Bills', String(Number(report.paidCount || 0)), ''],
+    ['showOpeningCash', 'Opening Cash', money(report.openingCash), ''],
+    ['showCashInHand', 'Cash In Hand', money(report.cashInHand), ''],
+    ['showBank', 'Bank', money(report.bankTotal), ''],
+    ['showDueCredit', 'Due / Credit', money(report.balanceTotal), ''],
+    ['showDiscount', 'Discount', money(report.discountTotal), ''],
+    ['showExpenses', 'Expense', money(report.expenseTotal), ''],
+    ['showNetAmount', 'Net Amount', money(report.netTotal), 'grand'],
+    ['showOpenBills', 'Open Amount', money(report.openTotal), ''],
+    ['showOpenBills', 'Open Bills', String(Number(report.openCount || 0)), ''],
+  ]
+    .filter(([key]) => isEnabled(key))
+    .map(([, label, value, className]) => `<tr class="${className}"><td>${label}</td><td>${value}</td></tr>`)
     .join('');
 
   return `
@@ -1230,10 +1257,14 @@ function buildReportHtml(payload) {
           .rule { border-top: 1px dashed #111; margin: 8px 0; }
           table { width: 100%; border-collapse: collapse; table-layout: fixed; }
           td { padding: 2px 0; vertical-align: top; }
-          td:first-child { width: 54%; overflow-wrap: anywhere; }
-          td:last-child { width: 46%; text-align: right; white-space: nowrap; padding-left: 3px; font-variant-numeric: tabular-nums; }
-          .grand td { font-size: ${paperWidth === 58 ? 11 : 14}px; font-weight: 800; border-top: 1px solid #111; padding-top: 6px; }
-          .section { margin-top: 8px; font-weight: 800; }
+           td:first-child { width: 54%; overflow-wrap: anywhere; }
+           td:last-child { width: 46%; text-align: right; white-space: nowrap; padding-left: 3px; font-variant-numeric: tabular-nums; }
+           .grand td { font-size: ${paperWidth === 58 ? 11 : 14}px; font-weight: 800; border-top: 1px solid #111; padding-top: 6px; }
+           .section { margin-top: 8px; font-weight: 800; }
+           .item-table td:first-child { width: 56%; }
+           .item-table td.qty { width: 14%; text-align: right; white-space: nowrap; }
+           .item-table td:last-child { width: 30%; }
+           .item-head td { font-size: 9px; font-weight: 800; border-bottom: 1px solid #111; }
           .thanks { margin-top: 10px; font-weight: 700; }
         </style>
       </head>
@@ -1248,25 +1279,11 @@ function buildReportHtml(payload) {
         </div>
         <div class="rule"></div>
         <table>
-          <tr class="grand"><td>Total Sales</td><td>${money(report.salesTotal)}</td></tr>
-          <tr><td>Paid Bills</td><td>${Number(report.paidCount || 0)}</td></tr>
-          <tr><td>Opening Cash</td><td>${money(report.openingCash)}</td></tr>
-          <tr><td>Cash In Hand</td><td>${money(report.cashInHand)}</td></tr>
-          <tr><td>UPI</td><td>${money(report.upiTotal)}</td></tr>
-          <tr><td>Card</td><td>${money(report.cardTotal)}</td></tr>
-          <tr><td>Bank</td><td>${money(report.bankTotal)}</td></tr>
-          <tr><td>Due / Credit</td><td>${money(report.balanceTotal)}</td></tr>
-          <tr><td>Discount</td><td>${money(report.discountTotal)}</td></tr>
-          <tr><td>Expense</td><td>${money(report.expenseTotal)}</td></tr>
-          <tr><td>Cash Expense</td><td>${money(report.cashExpenseTotal)}</td></tr>
-          <tr><td>Bank Expense</td><td>${money(report.bankExpenseTotal)}</td></tr>
-          <tr class="grand"><td>Net Amount</td><td>${money(report.netTotal)}</td></tr>
-          <tr><td>Open Amount</td><td>${money(report.openTotal)}</td></tr>
-          <tr><td>Open Bills</td><td>${Number(report.openCount || 0)}</td></tr>
+          ${summaryRows}
         </table>
-        <div class="rule"></div>
-        <div class="section">Order Type</div>
-        <table>${orderTypeRows || '<tr><td>No orders</td><td>0.00</td></tr>'}</table>
+        ${isEnabled('showPaymentSummary') && paymentRows ? `<div class="rule"></div><div class="section">Payment Summary</div><table>${paymentRows}</table>` : ''}
+        ${isEnabled('showOrderTypes') ? `<div class="rule"></div><div class="section">Order Type</div><table>${orderTypeRows || '<tr><td>No orders</td><td>0.00</td></tr>'}</table>` : ''}
+        ${isEnabled('showItemSummary') ? `<div class="rule"></div><div class="section">Item Summary</div><table class="item-table"><tr class="item-head"><td>Item</td><td class="qty">Qty</td><td>Total</td></tr>${itemRows || '<tr><td>No item sales</td><td class="qty">0</td><td>0.00</td></tr>'}</table>` : ''}
         <div class="rule"></div>
         <div class="center thanks">End of report</div>
       </body>
@@ -1405,7 +1422,12 @@ function buildEscPosReceipt(payload) {
   }
   text(parts, line(columns));
   bold(parts, true);
-  text(parts, twoCol('TOTAL', money(order.total), columns));
+  align(parts, 1);
+  size(parts, 0x11);
+  text(parts, 'TOTAL\n');
+  text(parts, `${money(order.total)}\n`);
+  size(parts, 0x00);
+  align(parts, 0);
   bold(parts, false);
   text(parts, line(columns));
   align(parts, 1);
@@ -1462,6 +1484,8 @@ function buildEscPosReport(payload) {
   const businessName = business.name || 'Restaurant';
   const columns = getEscPosColumns(payload?.settings);
   const parts = [];
+  const options = report.printOptions || {};
+  const isEnabled = (key) => options[key] !== false;
 
   push(parts, [0x1b, 0x40]);
   align(parts, 1);
@@ -1475,30 +1499,55 @@ function buildEscPosReport(payload) {
   text(parts, `${formatDateTime(new Date(report.generatedAt || Date.now()))}\n`);
   text(parts, line(columns));
   align(parts, 0);
-  bold(parts, true);
-  text(parts, twoCol('Total Sales', money(report.salesTotal), columns));
-  bold(parts, false);
-  text(parts, twoCol('Paid Bills', String(Number(report.paidCount || 0)), columns));
-  text(parts, twoCol('Opening Cash', money(report.openingCash), columns));
-  text(parts, twoCol('Cash In Hand', money(report.cashInHand), columns));
-  text(parts, twoCol('UPI', money(report.upiTotal), columns));
-  text(parts, twoCol('Card', money(report.cardTotal), columns));
-  text(parts, twoCol('Bank', money(report.bankTotal), columns));
-  text(parts, twoCol('Due / Credit', money(report.balanceTotal), columns));
-  text(parts, twoCol('Discount', money(report.discountTotal), columns));
-  text(parts, twoCol('Expense', money(report.expenseTotal), columns));
-  text(parts, twoCol('Cash Expense', money(report.cashExpenseTotal), columns));
-  text(parts, twoCol('Bank Expense', money(report.bankExpenseTotal), columns));
-  text(parts, twoCol('Net Amount', money(report.netTotal), columns));
-  text(parts, twoCol('Open Amount', money(report.openTotal), columns));
-  text(parts, twoCol('Open Bills', String(Number(report.openCount || 0)), columns));
-  text(parts, line(columns));
+  const reportRows = [
+    ['showTotalSales', 'Total Sales', money(report.salesTotal), true],
+    ['showAmountReceived', 'Amount Received', money(report.receivedTotal), false],
+    ['showPaidBills', 'Paid Bills', String(Number(report.paidCount || 0)), false],
+    ['showOpeningCash', 'Opening Cash', money(report.openingCash), false],
+    ['showCashInHand', 'Cash In Hand', money(report.cashInHand), false],
+    ['showBank', 'Bank', money(report.bankTotal), false],
+    ['showDueCredit', 'Due / Credit', money(report.balanceTotal), false],
+    ['showDiscount', 'Discount', money(report.discountTotal), false],
+    ['showExpenses', 'Expense', money(report.expenseTotal), false],
+    ['showNetAmount', 'Net Amount', money(report.netTotal), true],
+    ['showOpenBills', 'Open Amount', money(report.openTotal), false],
+    ['showOpenBills', 'Open Bills', String(Number(report.openCount || 0)), false],
+  ];
+  for (const [key, label, value, emphasized] of reportRows) {
+    if (!isEnabled(key)) continue;
+    bold(parts, emphasized);
+    text(parts, twoCol(label, value, columns));
+    bold(parts, false);
+  }
 
-  bold(parts, true);
-  text(parts, 'Order Type\n');
-  bold(parts, false);
-  for (const row of report.orderTypeRows || []) {
-    text(parts, twoCol(`${row.label} x ${Number(row.count || 0)}`, money(row.total), columns));
+  if (isEnabled('showPaymentSummary') && (report.paymentRows || []).length) {
+    text(parts, line(columns));
+    bold(parts, true);
+    text(parts, 'Payment Summary\n');
+    bold(parts, false);
+    for (const row of report.paymentRows) {
+      text(parts, twoCol(row.label, money(row.amount), columns));
+    }
+  }
+
+  if (isEnabled('showOrderTypes')) {
+    text(parts, line(columns));
+    bold(parts, true);
+    text(parts, 'Order Type\n');
+    bold(parts, false);
+    for (const row of report.orderTypeRows || []) {
+      text(parts, twoCol(`${row.label} x ${Number(row.count || 0)}`, money(row.total), columns));
+    }
+  }
+
+  if (isEnabled('showItemSummary')) {
+    text(parts, line(columns));
+    bold(parts, true);
+    text(parts, 'Item Summary\n');
+    bold(parts, false);
+    for (const row of report.itemRows || []) {
+      text(parts, twoCol(`${row.label} x ${Number(row.count || 0)}`, money(row.total), columns));
+    }
   }
 
   text(parts, line(columns));

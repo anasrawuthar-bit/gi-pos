@@ -690,6 +690,11 @@ button {
   color: #9a3412;
 }
 
+.cash-total-hint strong {
+  color: #0f766e;
+  font-size: 16px;
+}
+
 .bank-hint {
   background: #ecfeff;
   border-color: #a5f3fc;
@@ -2452,9 +2457,44 @@ button {
   align-items: start;
 }
 
+.billing-configuration-layout {
+  grid-template-columns: minmax(360px, 0.85fr) minmax(480px, 1.15fr);
+}
+
 .configuration-card {
   display: grid;
   gap: 14px;
+}
+
+.sales-configuration-card {
+  min-height: 100%;
+  align-content: start;
+}
+
+.configuration-flow-preview,
+.configuration-note {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 8px;
+}
+
+.configuration-flow-preview {
+  margin-top: auto;
+}
+
+.configuration-note strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.configuration-note span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.4;
 }
 
 .configuration-option {
@@ -2474,6 +2514,19 @@ button {
   height: 18px;
   margin-top: 2px;
   accent-color: #0f8b94;
+}
+
+.configuration-option.fixed-option {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+.configuration-option input:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.report-configuration-layout {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .configuration-option div {
@@ -2496,14 +2549,13 @@ button {
 
 .configuration-summary {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 9px;
 }
 
 .configuration-summary div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  gap: 4px;
   padding: 11px 12px;
   background: #f8fafc;
   border: 1px solid #d7dce3;
@@ -2518,6 +2570,7 @@ button {
 
 .configuration-summary strong {
   color: #111827;
+  font-size: 13px;
 }
 
 .staff-code-panel {
@@ -3768,6 +3821,37 @@ button {
   .printer-profile-editor .panel-actions {
     position: static;
   }
+}
+
+.report-item-head,
+.report-item-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px 88px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid #edf0f4;
+}
+
+.report-item-head {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.report-item-head span:nth-child(n + 2),
+.report-item-line strong {
+  text-align: right;
+}
+
+.report-item-line span {
+  min-width: 0;
+  overflow: hidden;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Brand refresh and theme system */
@@ -5284,6 +5368,7 @@ button {
   display: flex;
   align-items: end;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -5332,6 +5417,23 @@ button {
 .pos-shell .period-summary strong {
   color: var(--text);
   font-size: 14px;
+}
+
+.pos-shell .report-quick-periods {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pos-shell .report-quick-periods .small-button {
+  min-width: 68px;
+  height: 38px;
+  justify-content: center;
+  border-radius: 18px;
+}
+
+.pos-shell .page-head-actions .report-export-button {
+  min-width: 78px;
 }
 
 .pos-shell .report-export-panel {
@@ -6358,6 +6460,29 @@ button {
   border-radius: 7px;
   font-size: 13px;
   font-weight: 900;
+}
+
+.pos-shell .auth-login-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 10px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border));
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.pos-shell .auth-login-status svg {
+  animation: auth-spin 1s linear infinite;
+}
+
+@keyframes auth-spin {
+  to { transform: rotate(360deg); }
 }
 
 .pos-shell .user-lock-button {
@@ -7908,10 +8033,14 @@ button {
 }
 
 .pos-shell .payment-methods {
-  grid-template-columns: repeat(5, minmax(38px, 1fr));
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
 }
 
 .pos-shell .payment {
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 40px;
   border-radius: 7px;
 }

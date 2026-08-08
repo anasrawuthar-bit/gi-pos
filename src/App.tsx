@@ -55,6 +55,7 @@ import type {
 type OrderType = 'Dining' | 'Delivery' | 'Take Away' | 'Online'
 type PaymentMethod = 'Cash' | 'UPI' | 'Card' | 'Due' | 'Part'
 type PartTenderMethod = 'upi' | 'card'
+type ConfigurablePaymentMethod = Exclude<PaymentMethod, 'Cash'>
 type ThemeMode = 'light' | 'dark'
 type AppMode = 'cloud' | 'offline'
 type AppView =
@@ -73,6 +74,7 @@ type AppView =
   | 'service_staff'
   | 'settings'
   | 'configuration'
+  | 'report_configuration'
   | 'keyboard_shortcuts'
 type ReportPeriodMode = 'custom' | 'monthly' | 'yearly'
 type DiscountMode = 'percent' | 'amount'
@@ -318,8 +320,28 @@ type MenuDisplaySettings = {
   sidePanelWidth: number
 }
 
+type ReportPrintOptions = {
+  showTotalSales: boolean
+  showAmountReceived: boolean
+  showPaidBills: boolean
+  showItemsSold: boolean
+  showOpeningCash: boolean
+  showCashInHand: boolean
+  showBank: boolean
+  showDueCredit: boolean
+  showDiscount: boolean
+  showExpenses: boolean
+  showNetAmount: boolean
+  showOpenBills: boolean
+  showPaymentSummary: boolean
+  showOrderTypes: boolean
+  showItemSummary: boolean
+}
+
 type AppConfiguration = {
   showServiceStaffSelector: boolean
+  enabledPaymentMethods: Record<ConfigurablePaymentMethod, boolean>
+  reportPrintOptions: ReportPrintOptions
 }
 
 type MenuGridStyle = CSSProperties & {
@@ -542,6 +564,7 @@ type ReportPrintPayload = {
     salesTotal: number
     receivedTotal: number
     paidCount: number
+    itemsSold: number
     openingCash: number
     cashReceivedTotal: number
     cashInHand: number
@@ -557,7 +580,10 @@ type ReportPrintPayload = {
     netTotal: number
     openTotal: number
     openCount: number
+    printOptions: ReportPrintOptions
+    paymentRows: ReportPrintRow[]
     orderTypeRows: ReportPrintRow[]
+    itemRows: ReportPrintRow[]
   }
 }
 
@@ -616,6 +642,7 @@ const defaultMenuItems: MenuItem[] = [
 
 const orderTypes: OrderType[] = ['Dining', 'Delivery', 'Take Away', 'Online']
 const paymentMethods: PaymentMethod[] = ['Cash', 'UPI', 'Card', 'Due', 'Part']
+const configurablePaymentMethods: ConfigurablePaymentMethod[] = ['UPI', 'Card', 'Due', 'Part']
 const quickTags: Array<{ id: ItemTag; label: string }> = [
   { id: 'special', label: 'Special' },
   { id: 'hot', label: 'Hot Item' },
@@ -779,8 +806,33 @@ const defaultMenuDisplaySettings: MenuDisplaySettings = {
   sidePanelWidth: 86,
 }
 
+const defaultReportPrintOptions: ReportPrintOptions = {
+  showTotalSales: true,
+  showAmountReceived: true,
+  showPaidBills: true,
+  showItemsSold: true,
+  showOpeningCash: true,
+  showCashInHand: true,
+  showBank: true,
+  showDueCredit: true,
+  showDiscount: true,
+  showExpenses: true,
+  showNetAmount: true,
+  showOpenBills: true,
+  showPaymentSummary: true,
+  showOrderTypes: true,
+  showItemSummary: true,
+}
+
 const defaultAppConfiguration: AppConfiguration = {
   showServiceStaffSelector: true,
+  enabledPaymentMethods: {
+    UPI: true,
+    Card: true,
+    Due: true,
+    Part: true,
+  },
+  reportPrintOptions: defaultReportPrintOptions,
 }
 
 const menuDisplayLimits: Record<keyof MenuDisplaySettings, { min: number; max: number }> = {
@@ -1336,6 +1388,29 @@ function App() {
     [dailyReportPeriod, expenses, savedOrders],
   )
   const dailyOpeningCash = openingCashBalances[formatDateInputValue(dailyReportDate)] ?? 0
+  const enabledPartTenderMethods = useMemo<PartTenderMethod[]>(
+    () =>
+      (['upi', 'card'] as PartTenderMethod[]).filter((method) =>
+        method === 'upi' ? appConfiguration.enabledPaymentMethods.UPI : appConfiguration.enabledPaymentMethods.Card,
+      ),
+    [appConfiguration.enabledPaymentMethods],
+  )
+  const enabledPosPaymentMethods = useMemo<PaymentMethod[]>(
+    () =>
+      paymentMethods.filter((method) => {
+        if (method === 'Cash') return true
+        if (method === 'Part') {
+          return appConfiguration.enabledPaymentMethods.Part && enabledPartTenderMethods.length > 0
+        }
+        return appConfiguration.enabledPaymentMethods[method]
+      }),
+    [appConfiguration.enabledPaymentMethods, enabledPartTenderMethods.length],
+  )
+  const isDueCreditEnabled = appConfiguration.enabledPaymentMethods.Due
+  const visibleReportItems = useMemo(
+    () => periodReport.topItems.filter((item) => item.qty > 0 && item.total > 0),
+    [periodReport.topItems],
+  )
   const bestReportTrendPoint = useMemo(
     () =>
       periodReport.trendData.reduce<ReportTrendPoint | null>(
@@ -1580,7 +1655,9 @@ function App() {
 
   const cashReceived =
     paymentMethod === 'Cash' || paymentMethod === 'Part'
-      ? (amountReceivedOverride ?? (paymentMethod === 'Cash' ? baseTotals.total : 0))
+      ? paymentMethod === 'Cash' && !isDueCreditEnabled
+        ? baseTotals.total
+        : (amountReceivedOverride ?? (paymentMethod === 'Cash' ? baseTotals.total : 0))
       : 0
   const partAutoAmount =
     paymentMethod === 'Part' ? roundMoney(Math.max(baseTotals.total - Math.max(cashReceived, 0), 0)) : 0
@@ -1925,6 +2002,19 @@ function App() {
   useEffect(() => {
     persistStoredValue(appConfigurationStorageKey, appConfiguration, storageReady && !skipPersistenceRef.current)
   }, [appConfiguration, storageReady])
+
+  useEffect(() => {
+    if (!enabledPosPaymentMethods.includes(paymentMethod)) {
+      setPaymentMethod('Cash')
+      setAmountReceivedOverride(null)
+    }
+  }, [enabledPosPaymentMethods, paymentMethod])
+
+  useEffect(() => {
+    if (enabledPartTenderMethods.length && !enabledPartTenderMethods.includes(partTenderMethod)) {
+      setPartTenderMethod(enabledPartTenderMethods[0])
+    }
+  }, [enabledPartTenderMethods, partTenderMethod])
 
   useEffect(() => {
     if (!storageReady || !currentUser || !window.posDb) {
@@ -2334,6 +2424,7 @@ function App() {
     if (view === 'printer_config') return 'printer_manage'
     if (view === 'settings') return null
     if (view === 'configuration') return 'user_manage'
+    if (view === 'report_configuration') return 'user_manage'
     if (view === 'keyboard_shortcuts') return 'user_manage'
     if (view === 'network') return 'cloud_sync'
     return null
@@ -2373,6 +2464,7 @@ function App() {
       )
     }
     if (view === 'configuration') return hasPermission('user_manage')
+    if (view === 'report_configuration') return hasPermission('user_manage')
     if (view === 'keyboard_shortcuts') return hasPermission('user_manage')
     if (view === 'network') return hasPermission('cloud_sync') && hasGoldLocalPlan
 
@@ -2393,6 +2485,10 @@ function App() {
     }
 
     setActiveView(view)
+  }
+
+  function updateAppConfiguration(update: (settings: AppConfiguration) => AppConfiguration) {
+    setAppConfiguration((currentSettings) => normalizeAppConfiguration(update(normalizeAppConfiguration(currentSettings))))
   }
 
   function requirePermission(permission: StaffPermission, message?: string) {
@@ -2765,7 +2861,7 @@ function App() {
     }
 
     setLoginCheckingCloud(true)
-    setLoginError(appMode === 'offline' ? 'Checking offline license...' : 'Checking cloud subscription...')
+    setLoginError('')
 
     try {
       if (appMode === 'offline') {
@@ -4741,7 +4837,8 @@ function App() {
     setServicePercent(order.servicePercent)
     setTaxExempt(order.taxExempt ?? false)
     setPaymentMethod(order.paymentMethod)
-    setAmountReceivedOverride(order.paymentBreakdown?.cash ?? order.amountReceived)
+    const shouldAutoCalculateCash = order.status !== 'paid' && order.paymentMethod === 'Cash'
+    setAmountReceivedOverride(shouldAutoCalculateCash ? null : (order.paymentBreakdown?.cash ?? order.amountReceived))
     setPartTenderMethod((order.paymentBreakdown?.card ?? 0) > (order.paymentBreakdown?.upi ?? 0) ? 'card' : 'upi')
     setOrderListMode(null)
     setTableSelectorOpen(false)
@@ -4912,6 +5009,10 @@ function App() {
   }
 
   function ensureCreditCustomer() {
+    if (!isDueCreditEnabled) {
+      return true
+    }
+
     if (paymentMethod !== 'Due' && totals.balance <= 0) {
       return true
     }
@@ -6003,6 +6104,7 @@ function App() {
         salesTotal: reportData.salesTotal,
         receivedTotal: reportData.receivedTotal,
         paidCount: reportData.paidCount,
+        itemsSold: reportData.itemsSold,
         openingCash,
         cashReceivedTotal: reportData.cashReceivedTotal,
         cashInHand: roundMoney(openingCash + reportData.cashInHand),
@@ -6018,11 +6120,21 @@ function App() {
         netTotal: reportData.netTotal,
         openTotal: reportData.openTotal,
         openCount: reportData.openCount,
+        printOptions: appConfiguration.reportPrintOptions,
+        paymentRows: [
+          { label: 'Cash', amount: reportData.cashReceivedTotal },
+          { label: 'UPI', amount: reportData.upiTotal },
+          { label: 'Card', amount: reportData.cardTotal },
+          { label: 'Due / Credit', amount: reportData.balanceTotal },
+        ].filter((row) => reportNumberHasValue(row.amount ?? 0)),
         orderTypeRows: orderTypes.map((type) => ({
           label: type,
           count: reportData.orderTypeTotals[type].count,
           total: reportData.orderTypeTotals[type].total,
-        })),
+        })).filter((row) => (row.count ?? 0) > 0 || reportNumberHasValue(row.total ?? 0)),
+        itemRows: reportData.topItems
+          .filter((item) => item.qty > 0 && item.total > 0)
+          .map((item) => ({ label: item.name, count: item.qty, total: item.total })),
       },
     }
   }
@@ -6054,39 +6166,6 @@ function App() {
 
       printReportInBrowser(payload)
       setPrinterStatus('Report opened for printing')
-    } catch (error) {
-      setPrinterStatus(getErrorMessage(error))
-    }
-  }
-
-  async function printPreviousDayReport() {
-    if (!requirePermission('reports', 'Report permission required')) {
-      return
-    }
-
-    const yesterday = addDays(new Date(), -1)
-    const yesterdayDateValue = formatDateInputValue(yesterday)
-    setReportPrintDate(yesterdayDateValue)
-    const yesterdayPeriod = getDailyReportPeriod(yesterday)
-    const yesterdayReport = buildReport(savedOrders, yesterdayPeriod, expenses)
-    const title = `Previous Day Report - ${formatDate(yesterday)}`
-    const payload = buildReportPrintPayload(
-      yesterdayReport,
-      yesterdayPeriod,
-      title,
-      openingCashBalances[yesterdayDateValue] ?? 0,
-    )
-
-    try {
-      setPrinterStatus('Printing previous day report...')
-      if (window.posPrinter?.printReport) {
-        await window.posPrinter.printReport(payload)
-        setPrinterStatus('Previous day report sent to bill printer')
-        return
-      }
-
-      printReportInBrowser(payload)
-      setPrinterStatus('Previous day report opened for printing')
     } catch (error) {
       setPrinterStatus(getErrorMessage(error))
     }
@@ -6416,7 +6495,14 @@ function App() {
                 }}
               />
             </label>
-            {loginError && <div className="auth-error">{loginError}</div>}
+            {loginCheckingCloud ? (
+              <div className="auth-login-status" role="status">
+                <RefreshCw size={16} />
+                {appMode === 'offline' ? 'Loading...' : 'Connecting...'}
+              </div>
+            ) : (
+              loginError && <div className="auth-error">{loginError}</div>
+            )}
             <button
               className="home-action primary auth-submit"
               type="button"
@@ -6424,7 +6510,7 @@ function App() {
               disabled={loginCheckingCloud}
             >
               <User size={18} />
-              {loginCheckingCloud ? 'Checking Cloud' : 'Login'}
+              {loginCheckingCloud ? (appMode === 'offline' ? 'Loading...' : 'Connecting...') : 'Login'}
             </button>
             <button
               className="auth-link-button"
@@ -6727,6 +6813,13 @@ function App() {
                 <span>View and manage shortcut keys</span>
               </button>
             )}
+            {hasSubscriptionAccess && hasPermission('user_manage') && (
+              <button className="home-launch-tile settings-launch-tile" type="button" onClick={() => goToView('report_configuration')}>
+                <BarChart3 size={34} />
+                <strong>Report Configuration</strong>
+                <span>Choose printed report fields</span>
+              </button>
+            )}
             {hasSubscriptionAccess && hasPermission('menu_manage') && (
               <button className="home-launch-tile settings-launch-tile" type="button" onClick={openMenuSetup}>
                 <Pencil size={34} />
@@ -6791,11 +6884,13 @@ function App() {
             </div>
           </div>
 
-          <div className="configuration-layout">
-            <section className="home-card configuration-card">
+          <div className="configuration-layout billing-configuration-layout">
+            <section className="home-card configuration-card sales-configuration-card">
               <div className="section-title">
-                <strong>Sales Flow</strong>
-                <span>Dining order behavior</span>
+                <div>
+                  <strong>Sales Flow</strong>
+                  <span>Choose what happens after a dining table is selected</span>
+                </div>
               </div>
               <label className="configuration-option">
                 <input
@@ -6803,7 +6898,7 @@ function App() {
                   checked={appConfiguration.showServiceStaffSelector}
                   onChange={(event) => {
                     const enabled = event.currentTarget.checked
-                    setAppConfiguration((settings) => ({ ...settings, showServiceStaffSelector: enabled }))
+                    updateAppConfiguration((settings) => ({ ...settings, showServiceStaffSelector: enabled }))
                     if (!enabled) {
                       setStaffCodePromptOpen(false)
                       clearSelectedServiceStaff()
@@ -6818,27 +6913,178 @@ function App() {
                   </span>
                 </div>
               </label>
+              <div className="configuration-flow-preview">
+                <div className="section-title">
+                  <div>
+                    <strong>Current Billing Flow</strong>
+                    <span>{appConfiguration.showServiceStaffSelector ? 'Table, then staff, then payment' : 'Table, then payment'}</span>
+                  </div>
+                </div>
+                <div className="configuration-summary">
+                  <div>
+                    <span>Dining table</span>
+                    <strong>Required</strong>
+                  </div>
+                  <div>
+                    <span>Staff selection</span>
+                    <strong>{appConfiguration.showServiceStaffSelector ? 'Enabled' : 'Hidden'}</strong>
+                  </div>
+                  <div>
+                    <span>Print bill</span>
+                    <strong>Ready</strong>
+                  </div>
+                  <div>
+                    <span>Payment options</span>
+                    <strong>{enabledPosPaymentMethods.length} enabled</strong>
+                  </div>
+                </div>
+              </div>
             </section>
 
             <section className="home-card configuration-card">
               <div className="section-title">
-                <strong>Current Flow</strong>
-                <span>{appConfiguration.showServiceStaffSelector ? 'Staff required' : 'Staff hidden'}</span>
+                <strong>Payment Methods</strong>
+                <span>Cash is always available at billing</span>
               </div>
-              <div className="configuration-summary">
+              <label className="configuration-option fixed-option">
+                <input type="checkbox" checked disabled />
                 <div>
-                  <span>Dining Table</span>
-                  <strong>Required</strong>
+                  <strong>Cash</strong>
+                  <span>Required default method for every POS counter</span>
                 </div>
+              </label>
+              {configurablePaymentMethods.map((method) => {
+                const partUnavailable = method === 'Part' && !appConfiguration.enabledPaymentMethods.UPI && !appConfiguration.enabledPaymentMethods.Card
+                return (
+                  <label className="configuration-option" key={method}>
+                    <input
+                      type="checkbox"
+                      checked={appConfiguration.enabledPaymentMethods[method]}
+                      disabled={partUnavailable}
+                      onChange={(event) => {
+                        const enabled = event.currentTarget.checked
+                        updateAppConfiguration((settings) => ({
+                          ...settings,
+                          enabledPaymentMethods: {
+                            ...settings.enabledPaymentMethods,
+                            [method]: enabled,
+                          },
+                        }))
+                      }}
+                    />
+                    <div>
+                      <strong>{method}</strong>
+                      <span>
+                        {method === 'Part'
+                          ? partUnavailable
+                            ? 'Enable UPI or Card before using split payments'
+                            : 'Split cash with UPI or Card'
+                          : method === 'Due'
+                            ? 'Save the unpaid amount to the selected customer'
+                            : `Show ${method} as a payment option on the POS screen`}
+                      </span>
+                    </div>
+                  </label>
+                )
+              })}
+              <div className="configuration-note">
+                <strong>Visible at checkout</strong>
+                <span>Cash is always available. The enabled methods above appear beside it on the payment panel.</span>
+              </div>
+            </section>
+          </div>
+        </section>
+      )}
+
+      {activeView === 'report_configuration' && (
+        <section className="configuration-view page-view">
+          {renderSettingsContextBack('Report Configuration')}
+          <div className="page-head">
+            <div>
+              <span>Settings</span>
+              <h1>Report Configuration</h1>
+              <p>Choose the information included when thermal daily and period reports are printed</p>
+            </div>
+          </div>
+
+          <div className="configuration-layout report-configuration-layout">
+            <section className="home-card configuration-card">
+              <div className="section-title">
                 <div>
-                  <span>Staff Selection</span>
-                  <strong>{appConfiguration.showServiceStaffSelector ? 'Enabled' : 'Disabled'}</strong>
-                </div>
-                <div>
-                  <span>Save / Print</span>
-                  <strong>{appConfiguration.showServiceStaffSelector ? 'Requires staff' : 'No staff check'}</strong>
+                  <strong>Report Summary</strong>
+                  <span>Keep only the totals your team uses every day</span>
                 </div>
               </div>
+              {([
+                ['showTotalSales', 'Total sales', 'The main sales total for the selected period'],
+                ['showAmountReceived', 'Amount received', 'Cash, UPI, and card collections received during the period'],
+                ['showPaidBills', 'Paid bills', 'Number of completed bills'],
+                ['showItemsSold', 'Items sold', 'Total quantity of items sold across completed bills'],
+                ['showOpeningCash', 'Opening cash', 'Cash available before sales begin'],
+                ['showCashInHand', 'Cash in hand', 'Cash sales after cash expenses'],
+                ['showBank', 'Bank', 'UPI and card collections after bank expenses'],
+                ['showDueCredit', 'Due / credit', 'Outstanding customer credit'],
+                ['showDiscount', 'Discount', 'Discount given during the period'],
+                ['showExpenses', 'Expenses', 'Cash and bank expenses'],
+                ['showNetAmount', 'Net amount', 'Sales after expenses'],
+                ['showOpenBills', 'Open bills', 'Unclosed or held bills and their amount'],
+              ] as Array<[keyof ReportPrintOptions, string, string]>).map(([field, label, description]) => (
+                <label className="configuration-option" key={field}>
+                  <input
+                    type="checkbox"
+                    checked={appConfiguration.reportPrintOptions[field]}
+                    onChange={(event) => {
+                      const enabled = event.currentTarget.checked
+                      updateAppConfiguration((settings) => ({
+                        ...settings,
+                        reportPrintOptions: {
+                          ...settings.reportPrintOptions,
+                          [field]: enabled,
+                        },
+                      }))
+                    }}
+                  />
+                  <div>
+                    <strong>{label}</strong>
+                    <span>{description}</span>
+                  </div>
+                </label>
+              ))}
+            </section>
+
+            <section className="home-card configuration-card">
+              <div className="section-title">
+                <div>
+                  <strong>Report Sections</strong>
+                  <span>Optional detailed breakdowns for printed reports</span>
+                </div>
+              </div>
+              {([
+                ['showPaymentSummary', 'Payment summary', 'Show only payment methods that collected an amount'],
+                ['showOrderTypes', 'Order type summary', 'Show dining, delivery, takeaway, and online totals'],
+                ['showItemSummary', 'Item quantity summary', 'Show sold items with quantity and total, excluding zero-value lines'],
+              ] as Array<[keyof ReportPrintOptions, string, string]>).map(([field, label, description]) => (
+                <label className="configuration-option" key={field}>
+                  <input
+                    type="checkbox"
+                    checked={appConfiguration.reportPrintOptions[field]}
+                    onChange={(event) => {
+                      const enabled = event.currentTarget.checked
+                      updateAppConfiguration((settings) => ({
+                        ...settings,
+                        reportPrintOptions: {
+                          ...settings.reportPrintOptions,
+                          [field]: enabled,
+                        },
+                      }))
+                    }}
+                  />
+                  <div>
+                    <strong>{label}</strong>
+                    <span>{description}</span>
+                  </div>
+                </label>
+              ))}
             </section>
           </div>
         </section>
@@ -6945,29 +7191,25 @@ function App() {
               <p>{billingDisplayName} - {periodReport.periodLabel}</p>
             </div>
             <div className="page-head-actions">
-              <div className="report-print-date-row">
-                <input
-                  type="date"
-                  value={reportPrintDate}
-                  onChange={(event) => setReportPrintDate(event.currentTarget.value)}
-                  title="Select date for report print"
-                />
-                <button className="home-action" type="button" onClick={printSelectedDateReport}>
-                  <Printer size={18} />
-                  Print Selected Date
-                </button>
-                <button className="home-action" type="button" onClick={printCurrentPeriodReport}>
-                  <Printer size={18} />
-                  Print Period
-                </button>
-                <button className="home-action" type="button" onClick={printPreviousDayReport} title="Print yesterday's sales report">
-                  <Printer size={18} />
-                  Yesterday
-                </button>
-              </div>
-              <button className="home-action primary" type="button" onClick={() => goToView('pos')}>
-                <ShoppingCart size={18} />
-                POS Sale
+              <button className="home-action primary" type="button" onClick={printSelectedDateReport} title="Print the selected daily report">
+                <ReceiptText size={18} />
+                Shift Close
+              </button>
+              <button className="home-action" type="button" onClick={printCurrentPeriodReport}>
+                <Printer size={18} />
+                Print
+              </button>
+              <button className="home-action report-export-button" type="button" onClick={() => void exportCurrentPeriodReport('pdf')}>
+                <ReceiptText size={18} />
+                PDF
+              </button>
+              <button className="home-action report-export-button" type="button" onClick={() => void exportCurrentPeriodReport('excel')}>
+                <Save size={18} />
+                Excel
+              </button>
+              <button className="home-action report-export-button" type="button" onClick={() => void exportCurrentPeriodReport('csv')}>
+                <Save size={18} />
+                CSV
               </button>
             </div>
           </div>
@@ -7036,27 +7278,34 @@ function App() {
                 <span>Showing</span>
                 <strong>{periodReport.periodLabel}</strong>
               </div>
-            </div>
-          </section>
-
-          <section className="home-card report-export-panel">
-            <div>
-              <strong>Export Report</strong>
-              <span>Use for custom period, monthly, yearly, accountant sharing, or A4 printing.</span>
-            </div>
-            <div className="report-export-actions">
-              <button className="small-button" type="button" onClick={() => void exportCurrentPeriodReport('csv')}>
-                <Save size={15} />
-                CSV
-              </button>
-              <button className="small-button" type="button" onClick={() => void exportCurrentPeriodReport('excel')}>
-                <Save size={15} />
-                Excel
-              </button>
-              <button className="small-button primary" type="button" onClick={() => void exportCurrentPeriodReport('pdf')}>
-                <ReceiptText size={15} />
-                PDF
-              </button>
+              <div className="report-quick-periods">
+                <button
+                  className="small-button"
+                  type="button"
+                  onClick={() => {
+                    const today = new Date()
+                    setReportPeriodMode('custom')
+                    setReportFromDate(formatDateInputValue(today))
+                    setReportToDate(formatDateInputValue(today))
+                    setReportPrintDate(formatDateInputValue(today))
+                  }}
+                >
+                  Today
+                </button>
+                <button
+                  className="small-button"
+                  type="button"
+                  onClick={() => {
+                    const yesterday = addDays(new Date(), -1)
+                    setReportPeriodMode('custom')
+                    setReportFromDate(formatDateInputValue(yesterday))
+                    setReportToDate(formatDateInputValue(yesterday))
+                    setReportPrintDate(formatDateInputValue(yesterday))
+                  }}
+                >
+                  Yesterday
+                </button>
+              </div>
             </div>
           </section>
 
@@ -7117,6 +7366,11 @@ function App() {
               <span>Paid Bills</span>
               <strong>{periodReport.paidCount}</strong>
               <small>Average: {money(periodReport.averageBill)}</small>
+            </div>
+            <div className="report-card">
+              <span>Items Sold</span>
+              <strong>{formatItemQuantity(periodReport.itemsSold)}</strong>
+              <small>Total quantity in completed bills</small>
             </div>
             <div className="report-card">
               <span>Cash In Hand</span>
@@ -7187,20 +7441,26 @@ function App() {
           <div className="detail-report-layout report-analytics-layout">
             <section className="home-card report-section">
               <h3>Payment Summary</h3>
-              {paymentMethods.map((method) => (
-                <div className="report-line" key={method}>
-                  <span>{method}</span>
-                  <strong>{money(periodReport.paymentTotals[method] ?? 0)}</strong>
-                </div>
-              ))}
               <div className="report-line highlight">
-                <span>Cash actual</span>
+                <span>Cash In Hand</span>
                 <strong>{money(periodReport.cashInHand)}</strong>
               </div>
               <div className="report-line highlight">
-                <span>Bank actual</span>
+                <span>Bank</span>
                 <strong>{money(periodReport.bankTotal)}</strong>
               </div>
+              {([
+                ['UPI', periodReport.upiTotal],
+                ['Card', periodReport.cardTotal],
+                ['Due / Credit', periodReport.balanceTotal],
+              ] as Array<[string, number]>)
+                .filter(([, amount]) => reportNumberHasValue(amount))
+                .map(([label, amount]) => (
+                <div className="report-line" key={label}>
+                  <span>{label}</span>
+                  <strong>{money(amount)}</strong>
+                </div>
+              ))}
             </section>
 
             <section className="home-card report-section">
@@ -7235,13 +7495,19 @@ function App() {
 
             <section className="home-card report-section">
               <h3>Top Items</h3>
-              {periodReport.topItems.map((item) => (
-                <div className="report-line" key={item.name}>
-                  <span>{item.name} x {item.qty}</span>
+              <div className="report-item-head">
+                <span>Item</span>
+                <span>Qty</span>
+                <span>Total</span>
+              </div>
+              {visibleReportItems.map((item) => (
+                <div className="report-item-line" key={item.name}>
+                  <span>{item.name}</span>
+                  <strong>{item.qty}</strong>
                   <strong>{money(item.total)}</strong>
                 </div>
               ))}
-              {!periodReport.topItems.length && <div className="empty-list">No item sales yet</div>}
+              {!visibleReportItems.length && <div className="empty-list">No item sales yet</div>}
             </section>
 
             <section className="home-card report-table-card">
@@ -8678,10 +8944,12 @@ function App() {
                 {appConfiguration.showServiceStaffSelector && selectedServiceStaffName ? ` / ${selectedServiceStaffName}` : ''}
               </span>
             </button>
-            <button type="button" className="icon-action" title="Customer" onClick={() => setCustomerEditorOpen(true)}>
-              <User size={19} />
-              <span>{customer || 'Customer'}</span>
-            </button>
+            {isDueCreditEnabled && (
+              <button type="button" className="icon-action" title="Customer" onClick={() => setCustomerEditorOpen(true)}>
+                <User size={19} />
+                <span>{customer || 'Customer'}</span>
+              </button>
+            )}
             <button
               type="button"
               className="icon-action"
@@ -8775,14 +9043,16 @@ function App() {
 
           <footer className="payment-dock">
             <div className="payment-left">
-              <div className="totals-strip">
-                <span>Paid: {money(totals.paid)}</span>
-                <span>Due: {money(totals.balance)}</span>
-                <span>Return: {money(totals.change)}</span>
-              </div>
+              {isDueCreditEnabled && (
+                <div className="totals-strip">
+                  <span>Paid: {money(totals.paid)}</span>
+                  <span>Due: {money(totals.balance)}</span>
+                  <span>Return: {money(totals.change)}</span>
+                </div>
+              )}
 
               <div className="payment-methods">
-                {paymentMethods.map((method) => (
+                {enabledPosPaymentMethods.map((method) => (
                   <button
                     key={method}
                     className={paymentMethod === method ? 'payment active' : 'payment'}
@@ -8794,7 +9064,7 @@ function App() {
 
                       setPaymentMethod(method)
                       setAmountReceivedOverride(method === 'Cash' ? null : 0)
-                      setPartTenderMethod('upi')
+                      setPartTenderMethod(enabledPartTenderMethods[0] ?? 'upi')
                     }}
                   >
                     {getPaymentIcon(method)}
@@ -8824,31 +9094,31 @@ function App() {
                       onChange={(event) => setAmountReceivedOverride(numberFromInput(event.target.value))}
                     />
                   </label>
-                  <div className="part-method-select">
-                    <span>Remaining By</span>
-                    <div className="part-method-buttons">
-                      <button
-                        className={partTenderMethod === 'upi' ? 'active' : ''}
-                        type="button"
-                        onClick={() => setPartTenderMethod('upi')}
-                      >
-                        <Wifi size={15} />
-                        UPI
-                      </button>
-                      <button
-                        className={partTenderMethod === 'card' ? 'active' : ''}
-                        type="button"
-                        onClick={() => setPartTenderMethod('card')}
-                      >
-                        <CreditCard size={15} />
-                        Card
-                      </button>
+                    <div className="part-method-select">
+                      <span>Remaining By</span>
+                      <div className="part-method-buttons">
+                        {enabledPartTenderMethods.map((method) => (
+                          <button
+                            className={partTenderMethod === method ? 'active' : ''}
+                            type="button"
+                            key={method}
+                            onClick={() => setPartTenderMethod(method)}
+                          >
+                            {method === 'upi' ? <Wifi size={15} /> : <CreditCard size={15} />}
+                            {method === 'upi' ? 'UPI' : 'Card'}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  </div>
                   <div className="part-auto-amount">
                     <span>{partTenderMethod === 'upi' ? 'UPI Amount' : 'Card Amount'}</span>
                     <strong>{money(partAutoAmount)}</strong>
                   </div>
+                </div>
+              ) : paymentMethod === 'Cash' && !isDueCreditEnabled ? (
+                <div className="credit-hint cash-total-hint">
+                  <span>Cash received</span>
+                  <strong>{money(baseTotals.total)}</strong>
                 </div>
               ) : (
                 <label className="amount-field">
@@ -10065,6 +10335,10 @@ function App() {
                 <strong>{report.paidCount}</strong>
               </div>
               <div className="report-card">
+                <span>Items Sold</span>
+                <strong>{formatItemQuantity(report.itemsSold)}</strong>
+              </div>
+              <div className="report-card">
                 <span>Sales</span>
                 <strong>{money(report.salesTotal)}</strong>
               </div>
@@ -11050,6 +11324,10 @@ function money(value: number) {
   return value.toFixed(2)
 }
 
+function formatItemQuantity(value: number) {
+  return Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 3 })
+}
+
 function getTableGroupId(tableNo: string, tableGroups: DiningTableGroup[]) {
   return tableGroups.find((group) => group.tables.includes(tableNo))?.id ?? tableGroups[0]?.id ?? ''
 }
@@ -11462,9 +11740,18 @@ function escapeCsvValue(value: string) {
 
 function buildReportPrintHtml(payload: ReportPrintPayload) {
   const report = payload.report
+  const isEnabled = (field: keyof ReportPrintOptions) => report.printOptions[field] !== false
   const orderTypeRows = report.orderTypeRows
     .filter((row) => Number(row.count ?? 0) > 0 || reportNumberHasValue(row.total ?? 0))
     .map((row) => `<tr><td>${escapePrintHtml(row.label)} x ${row.count ?? 0}</td><td>${money(row.total ?? 0)}</td></tr>`)
+    .join('')
+  const paymentRows = report.paymentRows
+    .map((row) => `<tr><td>${escapePrintHtml(row.label)}</td><td>${money(row.amount ?? 0)}</td></tr>`)
+    .join('')
+  const itemRows = report.itemRows
+    .map(
+      (row) => `<tr><td>${escapePrintHtml(row.label)}</td><td class="qty">${row.count ?? 0}</td><td>${money(row.total ?? 0)}</td></tr>`,
+    )
     .join('')
   const reportRows = getThermalReportRows(report)
     .map((row) => `<tr class="${row.strong ? 'grand' : ''}"><td>${escapePrintHtml(row.label)}</td><td>${escapePrintHtml(row.value)}</td></tr>`)
@@ -11487,8 +11774,12 @@ function buildReportPrintHtml(payload: ReportPrintPayload) {
       table { width: 100%; border-collapse: collapse; }
       td { padding: 2px 0; vertical-align: top; }
       td:last-child { text-align: right; white-space: nowrap; padding-left: 8px; }
-      .grand td { font-size: 15px; font-weight: 800; border-top: 1px solid #111; padding-top: 5px; }
+      .grand td { font-size: 16px; font-weight: 900; border-top: 2px solid #111; padding-top: 6px; }
       .section { margin-top: 6px; font-weight: 800; }
+      .item-table td:first-child { width: 56%; }
+      .item-table td.qty { width: 14%; text-align: right; white-space: nowrap; }
+      .item-table td:last-child { width: 30%; }
+      .item-head td { font-size: 9px; font-weight: 800; border-bottom: 1px solid #111; }
     </style>
   </head>
   <body>
@@ -11502,11 +11793,9 @@ function buildReportPrintHtml(payload: ReportPrintPayload) {
     </div>
     <div class="rule"></div>
     <table>${reportRows}</table>
-    ${
-      orderTypeRows
-        ? `<div class="rule"></div><div class="section">Order Type</div><table>${orderTypeRows}</table>`
-        : ''
-    }
+    ${isEnabled('showPaymentSummary') && paymentRows ? `<div class="rule"></div><div class="section">Payment Summary</div><table>${paymentRows}</table>` : ''}
+    ${isEnabled('showOrderTypes') && orderTypeRows ? `<div class="rule"></div><div class="section">Order Type</div><table>${orderTypeRows}</table>` : ''}
+    ${isEnabled('showItemSummary') ? `<div class="rule"></div><div class="section">Item Summary</div><table class="item-table"><tr class="item-head"><td>Item</td><td class="qty">Qty</td><td>Total</td></tr>${itemRows || '<tr><td>No item sales</td><td class="qty">0</td><td>0.00</td></tr>'}</table>` : ''}
     <div class="rule"></div>
     <div class="center"><strong>End of report</strong></div>
   </body>
@@ -11514,24 +11803,29 @@ function buildReportPrintHtml(payload: ReportPrintPayload) {
 }
 
 function getThermalReportRows(report: ReportPrintPayload['report']) {
-  const candidates = [
-    { label: 'Total Sales', value: money(report.salesTotal), numericValue: report.salesTotal, strong: true, always: true },
-    { label: 'Paid Bills', value: String(report.paidCount), numericValue: report.paidCount, always: true },
-    { label: 'Opening Cash', value: money(report.openingCash), numericValue: report.openingCash },
-    { label: 'Amount Received', value: money(report.receivedTotal), numericValue: report.receivedTotal, always: true },
-    { label: 'Cash In Hand', value: money(report.cashInHand), numericValue: report.cashInHand, always: true },
-    { label: 'UPI', value: money(report.upiTotal), numericValue: report.upiTotal },
-    { label: 'Card', value: money(report.cardTotal), numericValue: report.cardTotal },
-    { label: 'Bank', value: money(report.bankTotal), numericValue: report.bankTotal },
-    { label: 'Due / Credit', value: money(report.balanceTotal), numericValue: report.balanceTotal },
-    { label: 'Discount', value: money(report.discountTotal), numericValue: report.discountTotal },
-    { label: 'Expense', value: money(report.expenseTotal), numericValue: report.expenseTotal },
-    { label: 'Net Amount', value: money(report.netTotal), numericValue: report.netTotal, strong: true, always: true },
-    { label: 'Open Amount', value: money(report.openTotal), numericValue: report.openTotal },
-    { label: 'Open Bills', value: String(report.openCount), numericValue: report.openCount },
+  const candidates: Array<{
+    field: keyof ReportPrintOptions
+    label: string
+    value: string
+    numericValue: number
+    strong?: boolean
+  }> = [
+    { field: 'showTotalSales', label: 'Total Sales', value: money(report.salesTotal), numericValue: report.salesTotal, strong: true },
+    { field: 'showAmountReceived', label: 'Amount Received', value: money(report.receivedTotal), numericValue: report.receivedTotal },
+    { field: 'showPaidBills', label: 'Paid Bills', value: String(report.paidCount), numericValue: report.paidCount },
+    { field: 'showItemsSold', label: 'Items Sold', value: formatItemQuantity(report.itemsSold), numericValue: report.itemsSold },
+    { field: 'showOpeningCash', label: 'Opening Cash', value: money(report.openingCash), numericValue: report.openingCash },
+    { field: 'showCashInHand', label: 'Cash In Hand', value: money(report.cashInHand), numericValue: report.cashInHand },
+    { field: 'showBank', label: 'Bank', value: money(report.bankTotal), numericValue: report.bankTotal },
+    { field: 'showDueCredit', label: 'Due / Credit', value: money(report.balanceTotal), numericValue: report.balanceTotal },
+    { field: 'showDiscount', label: 'Discount', value: money(report.discountTotal), numericValue: report.discountTotal },
+    { field: 'showExpenses', label: 'Expense', value: money(report.expenseTotal), numericValue: report.expenseTotal },
+    { field: 'showNetAmount', label: 'Net Amount', value: money(report.netTotal), numericValue: report.netTotal, strong: true },
+    { field: 'showOpenBills', label: 'Open Amount', value: money(report.openTotal), numericValue: report.openTotal },
+    { field: 'showOpenBills', label: 'Open Bills', value: String(report.openCount), numericValue: report.openCount },
   ]
 
-  return candidates.filter((row) => row.always || reportNumberHasValue(row.numericValue))
+  return candidates.filter((row) => report.printOptions[row.field] !== false)
 }
 
 function escapePrintHtml(value: unknown) {
@@ -12069,7 +12363,11 @@ function buildReport(orders: SavedOrder[], period?: ReportPeriod, expenses: Expe
   const itemTotals = new Map<string, { name: string; qty: number; total: number }>()
 
   paidOrders.forEach((order) => {
-    paymentTotals[order.paymentMethod] = roundMoney((paymentTotals[order.paymentMethod] ?? 0) + order.totals.total)
+    // Part payments are split into their real tenders so cash, UPI, and card reports stay accurate.
+    paymentTotals.Cash = roundMoney(paymentTotals.Cash + getOrderCashInHand(order))
+    paymentTotals.UPI = roundMoney(paymentTotals.UPI + getOrderUpiReceived(order))
+    paymentTotals.Card = roundMoney(paymentTotals.Card + getOrderCardReceived(order))
+    paymentTotals.Due = roundMoney(paymentTotals.Due + order.totals.balance)
     orderTypeTotals[order.orderType].count += 1
     orderTypeTotals[order.orderType].total = roundMoney(orderTypeTotals[order.orderType].total + order.totals.total)
 
@@ -12117,6 +12415,7 @@ function buildReport(orders: SavedOrder[], period?: ReportPeriod, expenses: Expe
 
   return {
     paidCount: paidOrders.length,
+    itemsSold: roundMoney(paidOrders.reduce((sum, order) => sum + order.cart.reduce((itemSum, line) => itemSum + line.qty, 0), 0)),
     openCount: openOrders.length,
     salesTotal,
     previousSalesTotal,
@@ -13280,12 +13579,37 @@ function normalizeMenuDisplaySettings(settings: MenuDisplaySettings) {
 }
 
 function normalizeAppConfiguration(settings: Partial<AppConfiguration> = {}) {
+  const enabledPaymentMethods = settings.enabledPaymentMethods ?? defaultAppConfiguration.enabledPaymentMethods
+  const reportPrintOptions = settings.reportPrintOptions ?? defaultReportPrintOptions
   return {
     ...defaultAppConfiguration,
     showServiceStaffSelector:
       typeof settings.showServiceStaffSelector === 'boolean'
         ? settings.showServiceStaffSelector
         : defaultAppConfiguration.showServiceStaffSelector,
+    enabledPaymentMethods: {
+      UPI: typeof enabledPaymentMethods.UPI === 'boolean' ? enabledPaymentMethods.UPI : defaultAppConfiguration.enabledPaymentMethods.UPI,
+      Card: typeof enabledPaymentMethods.Card === 'boolean' ? enabledPaymentMethods.Card : defaultAppConfiguration.enabledPaymentMethods.Card,
+      Due: typeof enabledPaymentMethods.Due === 'boolean' ? enabledPaymentMethods.Due : defaultAppConfiguration.enabledPaymentMethods.Due,
+      Part: typeof enabledPaymentMethods.Part === 'boolean' ? enabledPaymentMethods.Part : defaultAppConfiguration.enabledPaymentMethods.Part,
+    },
+    reportPrintOptions: {
+      showTotalSales: typeof reportPrintOptions.showTotalSales === 'boolean' ? reportPrintOptions.showTotalSales : defaultReportPrintOptions.showTotalSales,
+      showAmountReceived: typeof reportPrintOptions.showAmountReceived === 'boolean' ? reportPrintOptions.showAmountReceived : defaultReportPrintOptions.showAmountReceived,
+      showPaidBills: typeof reportPrintOptions.showPaidBills === 'boolean' ? reportPrintOptions.showPaidBills : defaultReportPrintOptions.showPaidBills,
+      showItemsSold: typeof reportPrintOptions.showItemsSold === 'boolean' ? reportPrintOptions.showItemsSold : defaultReportPrintOptions.showItemsSold,
+      showOpeningCash: typeof reportPrintOptions.showOpeningCash === 'boolean' ? reportPrintOptions.showOpeningCash : defaultReportPrintOptions.showOpeningCash,
+      showCashInHand: typeof reportPrintOptions.showCashInHand === 'boolean' ? reportPrintOptions.showCashInHand : defaultReportPrintOptions.showCashInHand,
+      showBank: typeof reportPrintOptions.showBank === 'boolean' ? reportPrintOptions.showBank : defaultReportPrintOptions.showBank,
+      showDueCredit: typeof reportPrintOptions.showDueCredit === 'boolean' ? reportPrintOptions.showDueCredit : defaultReportPrintOptions.showDueCredit,
+      showDiscount: typeof reportPrintOptions.showDiscount === 'boolean' ? reportPrintOptions.showDiscount : defaultReportPrintOptions.showDiscount,
+      showExpenses: typeof reportPrintOptions.showExpenses === 'boolean' ? reportPrintOptions.showExpenses : defaultReportPrintOptions.showExpenses,
+      showNetAmount: typeof reportPrintOptions.showNetAmount === 'boolean' ? reportPrintOptions.showNetAmount : defaultReportPrintOptions.showNetAmount,
+      showOpenBills: typeof reportPrintOptions.showOpenBills === 'boolean' ? reportPrintOptions.showOpenBills : defaultReportPrintOptions.showOpenBills,
+      showPaymentSummary: typeof reportPrintOptions.showPaymentSummary === 'boolean' ? reportPrintOptions.showPaymentSummary : defaultReportPrintOptions.showPaymentSummary,
+      showOrderTypes: typeof reportPrintOptions.showOrderTypes === 'boolean' ? reportPrintOptions.showOrderTypes : defaultReportPrintOptions.showOrderTypes,
+      showItemSummary: typeof reportPrintOptions.showItemSummary === 'boolean' ? reportPrintOptions.showItemSummary : defaultReportPrintOptions.showItemSummary,
+    },
   }
 }
 
