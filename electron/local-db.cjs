@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const initSqlJs = require('sql.js');
+const { DatabaseSync } = require('node:sqlite');
 
 const DB_FILE_NAME = 'gi-pos-local.sqlite';
 const DATA_DIR_NAME = 'GIPOS Restaurant';
@@ -9,6 +9,8 @@ const BACKUP_DIR_NAME = 'Backups';
 const MAX_AUTO_BACKUPS = 8;
 const MAX_MANUAL_BACKUPS = 10;
 const AUTO_BACKUP_MIN_INTERVAL_MS = 12 * 60 * 60 * 1000;
+const MIN_FREE_PAGES_FOR_COMPACTION = 256;
+const COMPACTION_FREE_PAGE_RATIO = 0.2;
 const SYNCABLE_KV_KEYS = new Set([
   'pos-business-profile',
   'pos-categories',
@@ -31,13 +33,18 @@ async function createLocalDatabase(app) {
   fs.mkdirSync(backupDir, { recursive: true });
   migrateLegacyDatabase(app, dbPath, backupDir);
 
-  const SQL = await initSqlJs({
-    locateFile: (file) => require.resolve(`sql.js/dist/${file}`),
-  });
-  let db = openDatabaseWithBackupFallback(SQL, dbPath, backupDir);
+  let db = enableNativeCompatibility(openDatabaseWithBackupFallback(dbPath, backupDir));
+  const previousUserVersion = getPragmaNumber(db, 'user_version');
+  if (previousUserVersion < 2 && fs.existsSync(dbPath)) {
+    createDatabaseBackup(dbPath, backupDir, 'before-native-upgrade');
+  }
 
-  db.run(`
-    PRAGMA user_version = 1;
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+    PRAGMA busy_timeout = 5000;
+    PRAGMA foreign_keys = ON;
+    PRAGMA user_version = 2;
 
     CREATE TABLE IF NOT EXISTS app_kv (
       key TEXT PRIMARY KEY,
@@ -56,10 +63,35 @@ async function createLocalDatabase(app) {
       created_at TEXT NOT NULL,
       synced_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS orders_v2 (
+      id TEXT PRIMARY KEY,
+      bill_number INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT '',
+      order_type TEXT NOT NULL DEFAULT '',
+      table_name TEXT NOT NULL DEFAULT '',
+      customer_id TEXT NOT NULL DEFAULT '',
+      total REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT '',
+      payload TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_orders_v2_created_at ON orders_v2 (created_at);
+    CREATE INDEX IF NOT EXISTS idx_orders_v2_bill_number ON orders_v2 (bill_number);
+    CREATE INDEX IF NOT EXISTS idx_orders_v2_status_created ON orders_v2 (status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_orders_v2_customer ON orders_v2 (customer_id);
+
+    CREATE INDEX IF NOT EXISTS idx_sync_outbox_pending_created
+      ON sync_outbox (synced_at, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_sync_outbox_entity_pending
+      ON sync_outbox (entity_type, entity_id, synced_at);
   `);
 
-  persistDatabase(db, dbPath);
-  createDatabaseBackup(dbPath, backupDir, 'startup');
+  migrateOrdersFromLegacyValue(db);
+  pruneLegacyOutbox(db);
+  compactDatabaseIfNeeded(db);
 
   return {
     path: dbPath,
@@ -67,13 +99,12 @@ async function createLocalDatabase(app) {
     backupDir,
     getSnapshot() {
       const values = {};
-      const result = db.exec('SELECT key, value FROM app_kv ORDER BY key');
+      const rows = db.prepare('SELECT key, value FROM app_kv ORDER BY key').all();
 
-      if (result[0]) {
-        for (const row of result[0].values) {
-          values[String(row[0])] = String(row[1] ?? '');
-        }
+      for (const row of rows) {
+        values[String(row.key)] = String(row.value ?? '');
       }
+      values['pos-orders'] = serializeStoredOrders(db, values['pos-orders']);
 
       return {
         engine: 'sqlite',
@@ -84,6 +115,15 @@ async function createLocalDatabase(app) {
       };
     },
     setValue(key, value) {
+      if (key === 'pos-orders') {
+        return replaceStoredOrders(db, value);
+      }
+
+      const existing = getStoredValue(db, key);
+      if (existing && existing.value === value) {
+        return { ok: true, key, updatedAt: existing.updatedAt, skipped: true };
+      }
+
       const now = new Date().toISOString();
       const payload = JSON.stringify({ key, value, updatedAt: now });
       db.run(
@@ -106,6 +146,18 @@ async function createLocalDatabase(app) {
     },
     setMany(entries) {
       const now = new Date().toISOString();
+      const latestEntries = new Map();
+      for (const entry of entries) {
+        latestEntries.set(entry.key, entry.value);
+      }
+      const changedEntries = [...latestEntries.entries()]
+        .map(([key, value]) => ({ key, value, existing: getStoredValue(db, key) }))
+        .filter((entry) => !entry.existing || entry.existing.value !== entry.value);
+
+      if (!changedEntries.length) {
+        return { ok: true, count: 0, updatedAt: now, skipped: true };
+      }
+
       db.run('BEGIN TRANSACTION');
 
       try {
@@ -118,8 +170,8 @@ async function createLocalDatabase(app) {
             sync_status = 'pending'
         `);
 
-        for (const entry of entries) {
-          statement.run([entry.key, entry.value, now]);
+        for (const entry of changedEntries) {
+          statement.run(entry.key, entry.value, now);
           if (shouldSyncKey(entry.key)) {
             insertOutboxEvent(
               db,
@@ -132,7 +184,6 @@ async function createLocalDatabase(app) {
           }
         }
 
-        statement.free();
         db.run('COMMIT');
       } catch (error) {
         db.run('ROLLBACK');
@@ -141,7 +192,7 @@ async function createLocalDatabase(app) {
 
       persistDatabase(db, dbPath);
 
-      return { ok: true, count: entries.length, updatedAt: now };
+      return { ok: true, count: changedEntries.length, updatedAt: now };
     },
     applyRemoteValues(entries) {
       const cleanEntries = Array.isArray(entries)
@@ -152,6 +203,17 @@ async function createLocalDatabase(app) {
       }
 
       const now = new Date().toISOString();
+      const remoteOrders = cleanEntries.find((entry) => entry.key === 'pos-orders');
+      const keyValueEntries = cleanEntries.filter((entry) => entry.key !== 'pos-orders');
+
+      if (remoteOrders) {
+        replaceStoredOrders(db, String(remoteOrders.value ?? ''), remoteOrders.updatedAt || now, false);
+      }
+
+      if (!keyValueEntries.length) {
+        return { ok: true, count: remoteOrders ? 1 : 0, updatedAt: now };
+      }
+
       db.run('BEGIN TRANSACTION');
 
       try {
@@ -164,11 +226,10 @@ async function createLocalDatabase(app) {
             sync_status = 'synced'
         `);
 
-        for (const entry of cleanEntries) {
-          statement.run([entry.key, String(entry.value ?? ''), entry.updatedAt || now]);
+        for (const entry of keyValueEntries) {
+          statement.run(entry.key, String(entry.value ?? ''), entry.updatedAt || now);
         }
 
-        statement.free();
         db.run('COMMIT');
       } catch (error) {
         db.run('ROLLBACK');
@@ -177,33 +238,25 @@ async function createLocalDatabase(app) {
 
       persistDatabase(db, dbPath);
 
-      return { ok: true, count: cleanEntries.length, updatedAt: now };
+      return { ok: true, count: keyValueEntries.length + (remoteOrders ? 1 : 0), updatedAt: now };
     },
     getPendingSync(limit = 100) {
       const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 500));
-      const statement = db.prepare(`
+      const rows = db.prepare(`
         SELECT id, entity_type, entity_id, operation, payload, created_at
         FROM sync_outbox
         WHERE synced_at IS NULL
         ORDER BY created_at ASC
         LIMIT ?
-      `);
-      statement.bind([safeLimit]);
-      const changes = [];
-
-      while (statement.step()) {
-        const row = statement.getAsObject();
-        changes.push({
+      `).all(safeLimit);
+      const changes = rows.map((row) => ({
           id: String(row.id),
           entityType: String(row.entity_type),
           entityId: String(row.entity_id),
           operation: String(row.operation),
           payload: parseJson(row.payload, {}),
           createdAt: String(row.created_at),
-        });
-      }
-
-      statement.free();
+        }));
 
       return { ok: true, changes };
     },
@@ -215,25 +268,27 @@ async function createLocalDatabase(app) {
 
       const now = new Date().toISOString();
       const placeholders = syncIds.map(() => '?').join(', ');
-      db.run(`UPDATE sync_outbox SET synced_at = ? WHERE id IN (${placeholders})`, [now, ...syncIds]);
+      db.run(`DELETE FROM sync_outbox WHERE id IN (${placeholders})`, syncIds);
       persistDatabase(db, dbPath);
 
       return { ok: true, count: syncIds.length, updatedAt: now };
     },
     clearPendingSync() {
       const now = new Date().toISOString();
-      db.run('UPDATE sync_outbox SET synced_at = ? WHERE synced_at IS NULL', [now]);
+      db.run('DELETE FROM sync_outbox WHERE synced_at IS NULL');
       persistDatabase(db, dbPath);
 
       return { ok: true, updatedAt: now };
     },
     resetAll() {
       const now = new Date().toISOString();
+      checkpointDatabase(db);
       createDatabaseBackup(dbPath, backupDir, 'before-reset');
       db.run('BEGIN TRANSACTION');
 
       try {
         db.run('DELETE FROM sync_outbox');
+        db.run('DELETE FROM orders_v2');
         db.run('DELETE FROM app_kv');
         db.run('COMMIT');
       } catch (error) {
@@ -246,6 +301,7 @@ async function createLocalDatabase(app) {
       return { ok: true, updatedAt: now };
     },
     createBackup() {
+      checkpointDatabase(db);
       const backup = createDatabaseBackup(dbPath, backupDir, 'manual');
       return { ok: true, path: backup.path, fileName: backup.fileName, updatedAt: new Date().toISOString() };
     },
@@ -260,28 +316,182 @@ async function createLocalDatabase(app) {
       }
 
       createDatabaseBackup(dbPath, backupDir, 'before-restore');
-      const nextDb = new SQL.Database(fs.readFileSync(backupPath));
-      nextDb.run('SELECT name FROM sqlite_master LIMIT 1');
+      checkpointDatabase(db);
       db.close();
-      db = nextDb;
-      persistDatabase(db, dbPath);
+      fs.copyFileSync(backupPath, dbPath);
+      db = enableNativeCompatibility(openDatabaseWithBackupFallback(dbPath, backupDir));
 
       return { ok: true, path: dbPath, restoredFrom: backupPath, updatedAt: new Date().toISOString() };
     },
     close() {
+      checkpointDatabase(db);
       createDatabaseBackup(dbPath, backupDir, 'close');
-      persistDatabase(db, dbPath);
       db.close();
     },
   };
 }
 
+function pruneLegacyOutbox(db) {
+  const before = getTableRowCount(db, 'sync_outbox');
+  if (!before) {
+    return false;
+  }
+
+  // Confirmed changes already live in the cloud, while older unsynced snapshots
+  // are replaced by the latest snapshot for the same key-value entity.
+  db.run('DELETE FROM sync_outbox WHERE synced_at IS NOT NULL');
+  db.run(`
+    DELETE FROM sync_outbox
+    WHERE synced_at IS NULL
+      AND rowid NOT IN (
+        SELECT latest_rowid
+        FROM (
+          SELECT MAX(rowid) AS latest_rowid
+          FROM sync_outbox
+          WHERE synced_at IS NULL
+          GROUP BY entity_type, entity_id
+        )
+      )
+  `);
+
+  return getTableRowCount(db, 'sync_outbox') !== before;
+}
+
+function compactDatabaseIfNeeded(db) {
+  const pageCount = getPragmaNumber(db, 'page_count');
+  const freePageCount = getPragmaNumber(db, 'freelist_count');
+  const shouldCompact =
+    freePageCount >= MIN_FREE_PAGES_FOR_COMPACTION &&
+    pageCount > 0 &&
+    freePageCount / pageCount >= COMPACTION_FREE_PAGE_RATIO;
+
+  if (!shouldCompact) {
+    return false;
+  }
+
+  db.run('VACUUM');
+  return true;
+}
+
+function getPragmaNumber(db, pragma) {
+  const row = db.prepare(`PRAGMA ${pragma}`).get();
+  return Number(row?.[pragma] || 0);
+}
+
+function getTableRowCount(db, tableName) {
+  const row = db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get();
+  return Number(row?.count || 0);
+}
+
+function migrateOrdersFromLegacyValue(db) {
+  const legacy = getStoredValue(db, 'pos-orders');
+  if (!legacy) {
+    return false;
+  }
+
+  const migrated = replaceStoredOrders(db, legacy.value, legacy.updatedAt, false);
+  if (migrated.ok) {
+    db.run('DELETE FROM app_kv WHERE key = ?', ['pos-orders']);
+  }
+  return migrated.ok;
+}
+
+function replaceStoredOrders(db, serializedOrders, updatedAt = new Date().toISOString(), queueForSync = true) {
+  const orders = parseJson(serializedOrders, null);
+  if (!Array.isArray(orders)) {
+    throw new Error('Saved orders data is invalid');
+  }
+
+  const normalizedOrders = orders.filter((order) => order && typeof order === 'object' && String(order.id || '').trim());
+  const existingRows = db.prepare('SELECT id, payload FROM orders_v2').all();
+  const existingPayloads = new Map(existingRows.map((row) => [String(row.id), String(row.payload)]));
+  const nextIds = new Set(normalizedOrders.map((order) => String(order.id)));
+  let changed = false;
+
+  db.run('BEGIN IMMEDIATE');
+  try {
+    for (const order of normalizedOrders) {
+      const id = String(order.id);
+      const payload = JSON.stringify(order);
+      if (existingPayloads.get(id) === payload) {
+        continue;
+      }
+
+      db.run(
+        `
+          INSERT INTO orders_v2 (
+            id, bill_number, status, order_type, table_name, customer_id,
+            total, created_at, updated_at, payload
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            bill_number = excluded.bill_number,
+            status = excluded.status,
+            order_type = excluded.order_type,
+            table_name = excluded.table_name,
+            customer_id = excluded.customer_id,
+            total = excluded.total,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at,
+            payload = excluded.payload
+        `,
+        [
+          id,
+          Number(order.billNumber || 0),
+          String(order.status || ''),
+          String(order.orderType || ''),
+          String(order.tableName || order.table?.name || ''),
+          String(order.customer?.id || order.customerId || ''),
+          Number(order.totals?.total || order.total || 0),
+          String(order.createdAt || updatedAt),
+          String(order.updatedAt || updatedAt),
+          payload,
+        ],
+      );
+      changed = true;
+    }
+
+    for (const row of existingRows) {
+      if (!nextIds.has(String(row.id))) {
+        db.run('DELETE FROM orders_v2 WHERE id = ?', [String(row.id)]);
+        changed = true;
+      }
+    }
+
+    db.run('COMMIT');
+  } catch (error) {
+    db.run('ROLLBACK');
+    throw error;
+  }
+
+  if (queueForSync && changed) {
+    insertOutboxEvent(
+      db,
+      'app_kv',
+      'pos-orders',
+      'upsert',
+      JSON.stringify({ key: 'pos-orders', value: JSON.stringify(normalizedOrders), updatedAt }),
+      updatedAt,
+    );
+  }
+
+  return { ok: true, key: 'pos-orders', updatedAt, skipped: !changed };
+}
+
+function serializeStoredOrders(db, legacyValue = '') {
+  const rows = db.prepare('SELECT payload FROM orders_v2 ORDER BY created_at DESC, bill_number DESC').all();
+  if (rows.length) {
+    return JSON.stringify(rows.map((row) => parseJson(row.payload, {})));
+  }
+
+  const legacy = parseJson(legacyValue, []);
+  return JSON.stringify(Array.isArray(legacy) ? legacy : []);
+}
+
 function persistDatabase(db, dbPath) {
-  const data = Buffer.from(db.export());
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  const tempPath = `${dbPath}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tempPath, data);
-  fs.renameSync(tempPath, dbPath);
+  void db;
+  void dbPath;
+  // Native SQLite durably writes each transaction to its WAL. Full database
+  // exports are intentionally avoided because they delay POS printing.
 }
 
 function getPersistentDataDir(app) {
@@ -314,10 +524,15 @@ function migrateLegacyDatabase(app, dbPath, backupDir) {
   createDatabaseBackup(dbPath, backupDir, 'legacy-migrated');
 }
 
-function openDatabaseWithBackupFallback(SQL, dbPath, backupDir) {
+function openDatabaseWithBackupFallback(dbPath, backupDir) {
   if (fs.existsSync(dbPath)) {
     try {
-      return new SQL.Database(fs.readFileSync(dbPath));
+      const database = new DatabaseSync(dbPath);
+      const integrity = database.prepare('PRAGMA integrity_check').get();
+      if (String(integrity?.integrity_check || '').toLowerCase() !== 'ok') {
+        throw new Error('SQLite integrity check failed');
+      }
+      return database;
     } catch {
       createCorruptCopy(dbPath, backupDir);
     }
@@ -326,10 +541,23 @@ function openDatabaseWithBackupFallback(SQL, dbPath, backupDir) {
   const latestBackup = listDatabaseBackups(backupDir)[0];
   if (latestBackup) {
     fs.copyFileSync(latestBackup.path, dbPath);
-    return new SQL.Database(fs.readFileSync(dbPath));
+    return new DatabaseSync(dbPath);
   }
 
-  return new SQL.Database();
+  return new DatabaseSync(dbPath);
+}
+
+function enableNativeCompatibility(db) {
+  db.run = (sql, params = []) => db.prepare(sql).run(...(Array.isArray(params) ? params : [params]));
+  return db;
+}
+
+function checkpointDatabase(db) {
+  try {
+    db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+  } catch {
+    // A backup is still attempted; SQLite keeps the committed WAL data safe.
+  }
 }
 
 function createDatabaseBackup(dbPath, backupDir, reason) {
@@ -441,6 +669,13 @@ function resolveBackupPath(backupDir, fileName) {
 }
 
 function insertOutboxEvent(db, entityType, entityId, operation, payload, createdAt) {
+  // Keep only the newest unsynced snapshot for each entity. A later change fully
+  // supersedes an older key-value snapshot, so retaining both only slows sync.
+  db.run(
+    `DELETE FROM sync_outbox
+     WHERE entity_type = ? AND entity_id = ? AND synced_at IS NULL`,
+    [entityType, entityId],
+  );
   db.run(
     `
       INSERT INTO sync_outbox (id, entity_type, entity_id, operation, payload, created_at)
@@ -448,6 +683,24 @@ function insertOutboxEvent(db, entityType, entityId, operation, payload, created
     `,
     [crypto.randomUUID(), entityType, entityId, operation, payload, createdAt],
   );
+}
+
+function getStoredValue(db, key) {
+  const existing = db.prepare(`
+    SELECT value, updated_at
+    FROM app_kv
+    WHERE key = ?
+    LIMIT 1
+  `).get(key);
+
+  if (!existing) {
+    return null;
+  }
+
+  return {
+    value: String(existing.value ?? ''),
+    updatedAt: String(existing.updated_at ?? ''),
+  };
 }
 
 function shouldSyncKey(key) {

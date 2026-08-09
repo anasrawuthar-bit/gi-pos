@@ -321,6 +321,8 @@ button {
     box-shadow 120ms ease,
     transform 120ms ease;
   position: relative;
+  content-visibility: auto;
+  contain-intrinsic-size: 104px 92px;
 }
 
 .menu-item:hover:not(:disabled) {
@@ -1165,6 +1167,8 @@ button {
   border: 1px solid #d7dce3;
   border-left: 4px solid #cbd5e1;
   border-radius: 6px;
+  content-visibility: auto;
+  contain-intrinsic-size: 68px;
 }
 
 .customer-select-button {
@@ -1852,6 +1856,15 @@ button {
   background: #f8fafc;
   border: 1px solid #d7dce3;
   border-radius: 10px;
+}
+
+.pos-shell .printer-driver-note {
+  grid-column: 1 / -1;
+  margin: -2px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
 }
 
 .routing-priority-grid {
@@ -3833,6 +3846,12 @@ button {
   border-top: 1px solid #edf0f4;
 }
 
+.report-items-scroll {
+  max-height: 390px;
+  overflow-y: auto;
+  padding-right: 5px;
+}
+
 .report-item-head {
   color: #64748b;
   font-size: 11px;
@@ -5419,6 +5438,10 @@ button {
   font-size: 14px;
 }
 
+.pos-shell .period-inputs label.period-time-field {
+  min-width: 112px;
+}
+
 .pos-shell .report-quick-periods {
   display: flex;
   align-items: center;
@@ -5432,8 +5455,61 @@ button {
   border-radius: 18px;
 }
 
-.pos-shell .page-head-actions .report-export-button {
-  min-width: 78px;
+.pos-shell .report-print-menu {
+  position: relative;
+  display: flex;
+}
+
+.pos-shell .report-print-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.pos-shell .report-print-toggle {
+  min-width: 38px;
+  width: 38px;
+  padding: 0;
+  justify-content: center;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left-color: var(--border-strong);
+}
+
+.pos-shell .report-export-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 138px;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: 0 12px 28px rgb(15 23 42 / 18%);
+}
+
+.pos-shell .report-export-menu button {
+  width: 100%;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  color: var(--text);
+  font: inherit;
+  font-weight: 800;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.pos-shell .report-export-menu button:hover,
+.pos-shell .report-export-menu button:focus-visible {
+  color: var(--accent-strong);
+  background: var(--surface-2);
+  outline: none;
 }
 
 .pos-shell .report-export-panel {

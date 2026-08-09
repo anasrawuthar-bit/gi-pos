@@ -136,31 +136,71 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
 
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    if (level < 2) {
+      return;
+    }
+    writeStartupDiagnostic(`Renderer console (${sourceId}:${line}): ${message}`);
+  });
+
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl) => {
+    writeStartupDiagnostic(`Renderer failed to load ${validatedUrl}: ${errorCode} ${errorDescription}`);
+  });
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    writeStartupDiagnostic(`Renderer process ended: ${details.reason} (exit code ${details.exitCode})`);
+  });
+
   mainWindow.maximize();
 }
 
-app.whenReady().then(async () => {
-  app.setName(APP_NAME);
-  localDatabase = await createLocalDatabase(app);
-  registerLocalDatabaseHandlers(ipcMain, () => localDatabase);
-  if (shouldStartLanServer(localDatabase)) {
-    lanServer = await createLanServer({
-      app,
-      getDatabase: () => localDatabase,
-      printKot: printKotFromLanServer,
-    });
-  }
-  registerLanServerHandlers(ipcMain, () => lanServer);
-  registerUpdaterHandlers();
-  createWindow();
-  setupAutoUpdater();
+function writeStartupDiagnostic(message) {
+  const filePath = path.join('C:\\', 'GIPOS Restaurant', 'startup-errors.log');
+  const line = `[${new Date().toISOString()}] ${message}\n`;
+  fs.appendFile(filePath, line).catch(() => undefined);
+}
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
     }
+
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.show();
+    mainWindow.focus();
   });
-});
+
+  app.whenReady().then(async () => {
+    app.setName(APP_NAME);
+    localDatabase = await createLocalDatabase(app);
+    registerLocalDatabaseHandlers(ipcMain, () => localDatabase);
+    if (shouldStartLanServer(localDatabase)) {
+      lanServer = await createLanServer({
+        app,
+        getDatabase: () => localDatabase,
+        printKot: printKotFromLanServer,
+      });
+    }
+
+    registerLanServerHandlers(ipcMain, () => lanServer);
+    registerUpdaterHandlers();
+    createWindow();
+    setupAutoUpdater();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      }
+    });
+  });
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -827,10 +867,9 @@ function printSystemHtml(payload, html, rejectionMessage) {
           printBackground: true,
           margins: { marginType: 'none' },
           deviceName,
-          pageSize: {
-            width: getPaperWidthMicrons(settings),
-            height: getPrintContentHeightMicronsFromPixels(metrics.height),
-          },
+          // Thermal Windows drivers are more reliable when their own configured
+          // POS 80mm or POS 58mm page size is used instead of a Chromium custom size.
+          usePrinterDefaultPageSize: true,
         };
 
         printWindow.webContents.print(options, (success, errorType) => {
@@ -887,18 +926,6 @@ async function waitForPrintableContent(printWindow) {
     `,
     true,
   );
-}
-
-function getPrintContentHeightMicronsFromPixels(contentHeightPx) {
-  const safeHeightPx = Math.max(Number(contentHeightPx || 0), 180);
-  const micronsPerCssPixel = 25400 / 96;
-  const feedMarginMicrons = 6000;
-
-  return Math.ceil(safeHeightPx * micronsPerCssPixel + feedMarginMicrons);
-}
-
-function getPaperWidthMicrons(settings) {
-  return settings.paperWidth === '58' ? 58000 : 80000;
 }
 
 function getPrintableHtmlWidthMm(paperWidth) {
@@ -1131,7 +1158,7 @@ function buildReceiptHtml(payload) {
             padding: 1.5mm 1.5mm 4mm;
             width: ${printableWidth}mm;
             background: #fff;
-            color: #111;
+            color: #000;
             font-family: "Arial", "Segoe UI", sans-serif;
             font-size: ${paperWidth === 58 ? 9 : 11}px;
             overflow: visible;
@@ -1141,8 +1168,8 @@ function buildReceiptHtml(payload) {
           .center { text-align: center; }
           .logo { width: ${paperWidth === 58 ? 34 : 44}px; height: ${paperWidth === 58 ? 34 : 44}px; object-fit: contain; margin-bottom: 4px; }
           .shop { font-size: ${paperWidth === 58 ? 14 : 17}px; font-weight: 800; letter-spacing: .3px; }
-          .muted { color: #333; }
-          .rule { border-top: 1px dashed #111; margin: 8px 0; }
+          .muted { color: #000; font-weight: 600; }
+          .rule { border-top: 1px dashed #000; margin: 8px 0; }
           .meta, .totals { width: 100%; border-collapse: collapse; table-layout: fixed; }
           .meta td, .totals td { padding: 2px 0; vertical-align: top; }
           .meta td:first-child { width: 34%; }
@@ -1150,11 +1177,11 @@ function buildReceiptHtml(payload) {
           .totals td:first-child { width: 46%; }
           .totals td:last-child { width: 54%; text-align: right; white-space: nowrap; padding-left: 3px; }
           table.items { width: 100%; border-collapse: collapse; table-layout: fixed; }
-          .items td { padding: 5px 0; border-bottom: 1px dotted #999; vertical-align: top; }
+          .items td { padding: 5px 0; border-bottom: 1px dotted #000; vertical-align: top; }
           .items td:first-child { width: 64%; padding-right: 3px; overflow-wrap: anywhere; }
           .items td:last-child { width: 36%; text-align: right; white-space: nowrap; padding-left: 3px; }
-          .items span { display: block; color: #444; margin-top: 1px; }
-          .grand td { font-size: ${paperWidth === 58 ? 16 : 20}px; font-weight: 900; border-top: 2px solid #111; padding-top: 7px; }
+          .items span { display: block; color: #000; margin-top: 1px; font-weight: 600; }
+          .grand td { font-size: ${paperWidth === 58 ? 16 : 20}px; font-weight: 900; border-top: 2px solid #000; padding-top: 7px; }
           .thanks { margin-top: 10px; font-weight: 700; }
         </style>
       </head>
@@ -1243,7 +1270,7 @@ function buildReportHtml(payload) {
             padding: 1.5mm 1.5mm 4mm;
             width: ${printableWidth}mm;
             background: #fff;
-            color: #111;
+            color: #000;
             font-family: "Arial", "Segoe UI", sans-serif;
             font-size: ${paperWidth === 58 ? 9 : 11}px;
             overflow: visible;
@@ -1253,18 +1280,18 @@ function buildReportHtml(payload) {
           .center { text-align: center; }
           .shop { font-size: ${paperWidth === 58 ? 14 : 17}px; font-weight: 800; }
           .title { margin-top: 4px; font-size: ${paperWidth === 58 ? 12 : 14}px; font-weight: 800; }
-          .muted { color: #333; }
-          .rule { border-top: 1px dashed #111; margin: 8px 0; }
+          .muted { color: #000; font-weight: 600; }
+          .rule { border-top: 1px dashed #000; margin: 8px 0; }
           table { width: 100%; border-collapse: collapse; table-layout: fixed; }
           td { padding: 2px 0; vertical-align: top; }
            td:first-child { width: 54%; overflow-wrap: anywhere; }
            td:last-child { width: 46%; text-align: right; white-space: nowrap; padding-left: 3px; font-variant-numeric: tabular-nums; }
-           .grand td { font-size: ${paperWidth === 58 ? 11 : 14}px; font-weight: 800; border-top: 1px solid #111; padding-top: 6px; }
+           .grand td { font-size: ${paperWidth === 58 ? 11 : 14}px; font-weight: 800; border-top: 1px solid #000; padding-top: 6px; }
            .section { margin-top: 8px; font-weight: 800; }
            .item-table td:first-child { width: 56%; }
            .item-table td.qty { width: 14%; text-align: right; white-space: nowrap; }
            .item-table td:last-child { width: 30%; }
-           .item-head td { font-size: 9px; font-weight: 800; border-bottom: 1px solid #111; }
+           .item-head td { font-size: 9px; font-weight: 800; border-bottom: 1px solid #000; }
           .thanks { margin-top: 10px; font-weight: 700; }
         </style>
       </head>
@@ -1325,7 +1352,7 @@ function buildKotHtml(payload) {
             padding: 1.5mm 1.5mm 4mm;
             width: ${printableWidth}mm;
             background: #fff;
-            color: #111;
+            color: #000;
             font-family: "Arial", "Segoe UI", sans-serif;
             font-size: ${paperWidth === 58 ? 11 : 13}px;
             overflow: visible;
@@ -1335,16 +1362,16 @@ function buildKotHtml(payload) {
           .center { text-align: center; }
           .title { font-size: ${paperWidth === 58 ? 18 : 22}px; font-weight: 900; letter-spacing: .8px; }
           .station { margin-top: 2px; font-size: ${paperWidth === 58 ? 14 : 16}px; font-weight: 800; }
-          .rule { border-top: 1px dashed #111; margin: 8px 0; }
+          .rule { border-top: 1px dashed #000; margin: 8px 0; }
           .meta { width: 100%; border-collapse: collapse; table-layout: fixed; }
           .meta td { padding: 2px 0; vertical-align: top; }
           .meta td:first-child { width: 38%; }
           .meta td:last-child { width: 62%; text-align: right; overflow-wrap: anywhere; }
           table.items { width: 100%; border-collapse: collapse; }
-          .items td { padding: 7px 0; border-bottom: 1px dotted #999; vertical-align: top; }
+          .items td { padding: 7px 0; border-bottom: 1px dotted #000; vertical-align: top; }
           .items .qty { width: 34px; font-size: ${paperWidth === 58 ? 17 : 20}px; font-weight: 900; text-align: center; }
           .items strong { display: block; font-size: ${paperWidth === 58 ? 13 : 15}px; }
-          .items span { display: block; margin-top: 2px; color: #333; }
+          .items span { display: block; margin-top: 2px; color: #000; font-weight: 600; }
           .footer { margin-top: 10px; text-align: center; font-weight: 800; }
         </style>
       </head>

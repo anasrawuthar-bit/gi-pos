@@ -1,7 +1,7 @@
 {
   "name": "gi-restaurant-pos",
   "private": true,
-  "version": "1.1.27",
+  "version": "1.1.36",
   "description": "Desktop restaurant POS system for GI POS Restaurant",
   "author": "GI Hostings",
   "type": "module",

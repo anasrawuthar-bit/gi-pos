@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import * as QRCodeGenerator from 'qrcode'
 import {
   BadgePercent,
@@ -6,6 +6,7 @@ import {
   BarChart3,
   Bell,
   Building2,
+  ChevronDown,
   ChevronLeft,
   Clock3,
   CreditCard,
@@ -699,7 +700,9 @@ const defaultDiningTableGroups: DiningTableGroup[] = [
 ]
 const appName = 'GI POS Restaurant'
 const appOwner = 'GI'
-const appVersion = '1.1.22'
+declare const __APP_VERSION__: string
+
+const appVersion = __APP_VERSION__
 const appIconUrl = `${import.meta.env.BASE_URL}app_icon.ico`
 const companyName = 'GI Hostings'
 const companyWebsite = 'https://www.gihostings.com'
@@ -1049,10 +1052,13 @@ function App() {
   const [orderListDate, setOrderListDate] = useState(() => formatDateInputValue(new Date()))
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([])
   const [reportOpen, setReportOpen] = useState(false)
+  const [reportExportMenuOpen, setReportExportMenuOpen] = useState(false)
   const [reportPrintDate, setReportPrintDate] = useState(() => formatDateInputValue(new Date()))
   const [reportPeriodMode, setReportPeriodMode] = useState<ReportPeriodMode>('monthly')
   const [reportFromDate, setReportFromDate] = useState(() => formatDateInputValue(startOfMonth(new Date())))
+  const [reportFromTime, setReportFromTime] = useState('00:00')
   const [reportToDate, setReportToDate] = useState(() => formatDateInputValue(new Date()))
+  const [reportToTime, setReportToTime] = useState('23:59')
   const [reportMonth, setReportMonth] = useState(() => formatMonthInputValue(new Date()))
   const [reportYear, setReportYear] = useState(() => String(new Date().getFullYear()))
   const [openingCashBalances, setOpeningCashBalances] = useState<Record<string, number>>(() =>
@@ -1263,21 +1269,39 @@ function App() {
   const [itemImagePreviewOpen, setItemImagePreviewOpen] = useState(false)
   const [itemImageSearching, setItemImageSearching] = useState(false)
 
+  // Keep typing responsive when a restaurant has a large menu or customer list.
+  const deferredMenuSearch = useDeferredValue(search)
+  const deferredCustomerSearch = useDeferredValue(customerSearch)
+  const menuSearchIndex = useMemo(
+    () =>
+      menuList.map((item) => ({
+        item,
+        searchableText: [item.name, item.category, ...(item.tags ?? [])].join(' ').toLocaleLowerCase(),
+      })),
+    [menuList],
+  )
+  const customerSearchIndex = useMemo(
+    () =>
+      customers.map((profile) => ({
+        profile,
+        searchableText: [profile.name, profile.phone, profile.address].join(' ').toLocaleLowerCase(),
+      })),
+    [customers],
+  )
+
   const filteredItems = useMemo(() => {
-    const query = search.trim().toLowerCase()
+    const query = deferredMenuSearch.trim().toLocaleLowerCase()
 
-    return menuList.filter((item) => {
-      const inCategory = activeCategory === 'all' || item.category === activeCategory
-      const inQuickTag = !activeQuickTag || item.tags?.includes(activeQuickTag)
-      const inSearch =
-        !query ||
-        item.name.toLowerCase().includes(query) ||
-        item.category.toLowerCase().includes(query) ||
-        item.tags?.some((tag) => tag.toLowerCase().includes(query))
+    return menuSearchIndex
+      .filter(({ item, searchableText }) => {
+        const inCategory = activeCategory === 'all' || item.category === activeCategory
+        const inQuickTag = !activeQuickTag || item.tags?.includes(activeQuickTag)
+        const inSearch = !query || searchableText.includes(query)
 
-      return inCategory && inQuickTag && inSearch
-    })
-  }, [activeCategory, activeQuickTag, menuList, search])
+        return inCategory && inQuickTag && inSearch
+      })
+      .map(({ item }) => item)
+  }, [activeCategory, activeQuickTag, deferredMenuSearch, menuSearchIndex])
 
   const orderedCategoryList = useMemo(() => sortCategories(categoryList), [categoryList])
 
@@ -1360,8 +1384,8 @@ function App() {
 
   const report = useMemo(() => buildReport(savedOrders, undefined, expenses), [expenses, savedOrders])
   const reportPeriod = useMemo(
-    () => getReportPeriod(reportPeriodMode, reportFromDate, reportToDate, reportMonth, reportYear),
-    [reportFromDate, reportMonth, reportPeriodMode, reportToDate, reportYear],
+    () => getReportPeriod(reportPeriodMode, reportFromDate, reportFromTime, reportToDate, reportToTime, reportMonth, reportYear),
+    [reportFromDate, reportFromTime, reportMonth, reportPeriodMode, reportToDate, reportToTime, reportYear],
   )
   const periodReport = useMemo(() => buildReport(savedOrders, reportPeriod, expenses), [expenses, reportPeriod, savedOrders])
   const periodReportOrders = useMemo(
@@ -1420,11 +1444,9 @@ function App() {
     [periodReport.trendData],
   )
   const filteredCustomers = useMemo(() => {
-    const query = customerSearch.trim().toLowerCase()
+    const query = deferredCustomerSearch.trim().toLocaleLowerCase()
     const matches = query
-      ? customers.filter((profile) =>
-          [profile.name, profile.phone, profile.address].some((value) => value.toLowerCase().includes(query)),
-        )
+      ? customerSearchIndex.filter(({ searchableText }) => searchableText.includes(query)).map(({ profile }) => profile)
       : customers
     const filteredMatches = matches.filter((profile) => {
       if (customerFilter === 'due') {
@@ -1450,7 +1472,7 @@ function App() {
 
       return new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime()
     })
-  }, [customerFilter, customerSearch, customerSort, customers])
+  }, [customerFilter, customerSearchIndex, customerSort, customers, deferredCustomerSearch])
   const customerStats = useMemo(() => {
     const dueCustomers = customers.filter((profile) => profile.creditBalance > 0)
 
@@ -2254,7 +2276,9 @@ function App() {
       goToView('reports')
     } else if (actionId === 'home-settings') {
       goToView('settings')
-    } else if (actionId === 'pos-print-bill' || actionId === 'pos-save-print') {
+    } else if (actionId === 'pos-print-bill') {
+      void printReceipt(false)
+    } else if (actionId === 'pos-save-print') {
       void printReceipt(true)
     } else if (actionId === 'pos-save-bill') {
       void savePaidOrder()
@@ -2336,6 +2360,7 @@ function App() {
       cloudSyncSettings.apiKey.trim(),
   )
   const hasOfflineAccess = appMode === 'offline' && isOfflineLicenseValid(offlineLicense)
+  const registrationRequired = !hasOfflineAccess && !hasCloudDeviceConnection
   const currentPlanDetails = hasOfflineAccess
     ? getAppPlanDetails(offlineLicense.subscriptionPlan, offlineLicense.subscriptionMaxDevices) ?? appPlanCatalog.offline
     : getAppPlanDetails(cloudSyncSettings.subscriptionPlan, cloudSyncSettings.subscriptionMaxDevices)
@@ -6271,7 +6296,7 @@ function App() {
     )
   }
 
-  if (!staffUsers.length) {
+  if (!staffUsers.length || registrationRequired) {
     return (
       <main className="pos-shell auth-shell" data-theme={theme}>
         <section className="auth-card setup-card">
@@ -6280,9 +6305,13 @@ function App() {
               <img src={appIconUrl} alt="" />
             </div>
             <div>
-              <span>Cloud Restore</span>
+              <span>{registrationRequired ? 'Registration Required' : 'Cloud Restore'}</span>
               <h1>{appName}</h1>
-              <p>Login with your cloud account and restore the saved POS users before billing.</p>
+              <p>
+                {registrationRequired
+                  ? 'Activate this POS with your registered cloud account before billing.'
+                  : 'Login with your cloud account and restore the saved POS users before billing.'}
+              </p>
             </div>
             <div className="auth-badges">
               <span>Cloud Backup</span>
@@ -6292,8 +6321,12 @@ function App() {
           </div>
           <div className="auth-form-panel">
             <div>
-              <h2>Cloud Login</h2>
-              <p>Use the registered phone/email and password. Restored app users can login with their old PIN.</p>
+              <h2>{registrationRequired ? 'Activate POS' : 'Cloud Login'}</h2>
+              <p>
+                {registrationRequired
+                  ? 'Use the registered phone/email and password to activate this POS.'
+                  : 'Use the registered phone/email and password. Restored app users can login with their old PIN.'}
+              </p>
             </div>
             <div className="setup-cloud-panel">
               <label className="wide">
@@ -7195,22 +7228,37 @@ function App() {
                 <ReceiptText size={18} />
                 Shift Close
               </button>
-              <button className="home-action" type="button" onClick={printCurrentPeriodReport}>
-                <Printer size={18} />
-                Print
-              </button>
-              <button className="home-action report-export-button" type="button" onClick={() => void exportCurrentPeriodReport('pdf')}>
-                <ReceiptText size={18} />
-                PDF
-              </button>
-              <button className="home-action report-export-button" type="button" onClick={() => void exportCurrentPeriodReport('excel')}>
-                <Save size={18} />
-                Excel
-              </button>
-              <button className="home-action report-export-button" type="button" onClick={() => void exportCurrentPeriodReport('csv')}>
-                <Save size={18} />
-                CSV
-              </button>
+              <div className="report-print-menu">
+                <button className="home-action report-print-main" type="button" onClick={printCurrentPeriodReport}>
+                  <Printer size={18} />
+                  Print
+                </button>
+                <button
+                  className="home-action report-print-toggle"
+                  type="button"
+                  aria-label="More report export options"
+                  aria-expanded={reportExportMenuOpen}
+                  onClick={() => setReportExportMenuOpen((open) => !open)}
+                >
+                  <ChevronDown size={18} />
+                </button>
+                {reportExportMenuOpen && (
+                  <div className="report-export-menu" role="menu">
+                    <button type="button" role="menuitem" onClick={() => { setReportExportMenuOpen(false); void exportCurrentPeriodReport('pdf') }}>
+                      <ReceiptText size={16} />
+                      PDF
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => { setReportExportMenuOpen(false); void exportCurrentPeriodReport('excel') }}>
+                      <Save size={16} />
+                      Excel
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => { setReportExportMenuOpen(false); void exportCurrentPeriodReport('csv') }}>
+                      <Save size={16} />
+                      CSV
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -7232,19 +7280,35 @@ function App() {
               {reportPeriodMode === 'custom' && (
                 <>
                   <label>
-                    From
+                    From Date
                     <input
                       type="date"
                       value={reportFromDate}
                       onChange={(event) => setReportFromDate(event.currentTarget.value)}
                     />
                   </label>
+                  <label className="period-time-field">
+                    From Time
+                    <input
+                      type="time"
+                      value={reportFromTime}
+                      onChange={(event) => setReportFromTime(event.currentTarget.value)}
+                    />
+                  </label>
                   <label>
-                    To
+                    To Date
                     <input
                       type="date"
                       value={reportToDate}
                       onChange={(event) => setReportToDate(event.currentTarget.value)}
+                    />
+                  </label>
+                  <label className="period-time-field">
+                    To Time
+                    <input
+                      type="time"
+                      value={reportToTime}
+                      onChange={(event) => setReportToTime(event.currentTarget.value)}
                     />
                   </label>
                 </>
@@ -7286,7 +7350,9 @@ function App() {
                     const today = new Date()
                     setReportPeriodMode('custom')
                     setReportFromDate(formatDateInputValue(today))
+                    setReportFromTime('00:00')
                     setReportToDate(formatDateInputValue(today))
+                    setReportToTime('23:59')
                     setReportPrintDate(formatDateInputValue(today))
                   }}
                 >
@@ -7299,7 +7365,9 @@ function App() {
                     const yesterday = addDays(new Date(), -1)
                     setReportPeriodMode('custom')
                     setReportFromDate(formatDateInputValue(yesterday))
+                    setReportFromTime('00:00')
                     setReportToDate(formatDateInputValue(yesterday))
+                    setReportToTime('23:59')
                     setReportPrintDate(formatDateInputValue(yesterday))
                   }}
                 >
@@ -7494,47 +7562,22 @@ function App() {
             </section>
 
             <section className="home-card report-section">
-              <h3>Top Items</h3>
+              <h3>Items Sold</h3>
               <div className="report-item-head">
                 <span>Item</span>
                 <span>Qty</span>
                 <span>Total</span>
               </div>
-              {visibleReportItems.map((item) => (
-                <div className="report-item-line" key={item.name}>
-                  <span>{item.name}</span>
-                  <strong>{item.qty}</strong>
-                  <strong>{money(item.total)}</strong>
-                </div>
-              ))}
-              {!visibleReportItems.length && <div className="empty-list">No item sales yet</div>}
-            </section>
-
-            <section className="home-card report-table-card">
-              <h3>Bill Details</h3>
-              <div className="detail-table">
-                <div className="detail-row head">
-                  <span>Bill</span>
-                  <span>Date</span>
-                  <span>Type</span>
-                  <span>Customer</span>
-                  <span>Payment</span>
-                  <span>Status</span>
-                  <span>Total</span>
-                </div>
-                {periodReport.recentOrders.map((order) => (
-                  <div className="detail-row" key={order.id}>
-                    <span>#{order.billNo}</span>
-                    <span>{formatDateTime(new Date(order.createdAt))}</span>
-                    <span>{order.orderType}{order.table ? ` / ${order.table}` : ''}</span>
-                    <span>{order.customer || 'Walk-in'}</span>
-                    <span>{order.paymentMethod}</span>
-                    <span>{order.status}</span>
-                    <strong>{money(order.totals.total)}</strong>
+              <div className="report-items-scroll">
+                {visibleReportItems.map((item) => (
+                  <div className="report-item-line" key={item.name}>
+                    <span>{item.name}</span>
+                    <strong>{item.qty}</strong>
+                    <strong>{money(item.total)}</strong>
                   </div>
                 ))}
-                {!periodReport.recentOrders.length && <div className="empty-list">No bills found</div>}
               </div>
+              {!visibleReportItems.length && <div className="empty-list">No item sales yet</div>}
             </section>
           </div>
         </section>
@@ -9192,7 +9235,7 @@ function App() {
                   <span>Hold</span>
                   {renderShortcutKey('pos-hold')}
                 </button>
-                <button className="action primary print-primary-action" type="button" onClick={() => printReceipt(true)}>
+                <button className="action primary print-primary-action" type="button" onClick={() => printReceipt(false)}>
                   <ReceiptText size={18} />
                   <span>Print Bill</span>
                   {renderShortcutKey('pos-print-bill')}
@@ -10968,6 +11011,9 @@ function App() {
                     POS 58mm
                   </button>
                 </div>
+                <p className="printer-driver-note">
+                  Match this with the paper size selected in Windows Printer Preferences. Direct printing uses that Windows printer setting.
+                </p>
               </div>
 
               <div className="panel-actions">
@@ -11987,7 +12033,9 @@ function parseMonthInputValue(value: string, fallback: Date) {
 function getReportPeriod(
   mode: ReportPeriodMode,
   fromDate: string,
+  fromTime: string,
   toDate: string,
+  toTime: string,
   monthValue: string,
   yearValue: string,
   fallbackDate = new Date(),
@@ -12010,10 +12058,22 @@ function getReportPeriod(
   const fallbackTo = fallbackDate
   const parsedFrom = parseDateInputValue(fromDate, fallbackFrom)
   const parsedTo = parseDateInputValue(toDate, fallbackTo)
-  const from = startOfDay(parsedFrom <= parsedTo ? parsedFrom : parsedTo)
-  const to = endOfDay(parsedFrom <= parsedTo ? parsedTo : parsedFrom)
+  const fromCandidate = applyTimeToDate(parsedFrom, fromTime, '00:00')
+  const toCandidate = applyTimeToDate(parsedTo, toTime, '23:59')
+  const from = fromCandidate <= toCandidate ? fromCandidate : toCandidate
+  const to = fromCandidate <= toCandidate ? toCandidate : fromCandidate
 
-  return { mode, from, to, label: `${formatDate(from)} to ${formatDate(to)}` }
+  return { mode, from, to, label: `${formatDate(from)}, ${formatTime(from)} to ${formatDate(to)}, ${formatTime(to)}` }
+}
+
+function applyTimeToDate(date: Date, value: string, fallback: string) {
+  const [fallbackHours, fallbackMinutes] = fallback.split(':').map(Number)
+  const [hours, minutes] = value.split(':').map(Number)
+  const safeHours = Number.isInteger(hours) && hours >= 0 && hours <= 23 ? hours : fallbackHours
+  const safeMinutes = Number.isInteger(minutes) && minutes >= 0 && minutes <= 59 ? minutes : fallbackMinutes
+  const result = new Date(date)
+  result.setHours(safeHours, safeMinutes, safeHours === 23 && safeMinutes === 59 ? 59 : 0, safeHours === 23 && safeMinutes === 59 ? 999 : 0)
+  return result
 }
 
 function getDailyReportPeriod(value: Date): ReportPeriod {
@@ -12368,8 +12428,9 @@ function buildReport(orders: SavedOrder[], period?: ReportPeriod, expenses: Expe
     paymentTotals.UPI = roundMoney(paymentTotals.UPI + getOrderUpiReceived(order))
     paymentTotals.Card = roundMoney(paymentTotals.Card + getOrderCardReceived(order))
     paymentTotals.Due = roundMoney(paymentTotals.Due + order.totals.balance)
-    orderTypeTotals[order.orderType].count += 1
-    orderTypeTotals[order.orderType].total = roundMoney(orderTypeTotals[order.orderType].total + order.totals.total)
+    const reportOrderType: OrderType = orderTypes.includes(order.orderType) ? order.orderType : 'Dining'
+    orderTypeTotals[reportOrderType].count += 1
+    orderTypeTotals[reportOrderType].total = roundMoney(orderTypeTotals[reportOrderType].total + order.totals.total)
 
     order.cart.forEach((line) => {
       const savedItem = itemTotals.get(line.name) ?? { name: line.name, qty: 0, total: 0 }
@@ -12449,8 +12510,7 @@ function buildReport(orders: SavedOrder[], period?: ReportPeriod, expenses: Expe
     paymentTotals,
     orderTypeTotals,
     topItems: Array.from(itemTotals.values())
-      .sort((first, second) => second.total - first.total)
-      .slice(0, 12),
+      .sort((first, second) => second.total - first.total),
     trendData: period ? buildReportTrend(paidOrders, period) : [],
     trendLabel: period ? getReportTrendLabel(period) : 'All time',
     periodLabel: period?.label ?? 'All time',
@@ -12467,7 +12527,7 @@ function isOrderInsidePeriod(order: SavedOrder, period: ReportPeriod) {
 
 function isExpenseInsidePeriod(expense: ExpenseEntry, period: ReportPeriod) {
   const expenseDate = parseDateInputValue(expense.date, new Date(expense.createdAt))
-  return Number.isFinite(expenseDate.getTime()) && expenseDate >= period.from && expenseDate <= period.to
+  return Number.isFinite(expenseDate.getTime()) && expenseDate >= startOfDay(period.from) && expenseDate <= endOfDay(period.to)
 }
 
 function getReportTrendLabel(period: ReportPeriod) {
@@ -12645,10 +12705,14 @@ function persistStoredValue(key: string, value: unknown, storageReady: boolean, 
     return
   }
 
-  localStorage.setItem(key, localStorageValue ?? JSON.stringify(value))
+  const serializedValue = localStorageValue ?? JSON.stringify(value)
+
+  if (localStorage.getItem(key) !== serializedValue) {
+    localStorage.setItem(key, serializedValue)
+  }
 
   if (window.posDb) {
-    void window.posDb.set(key, JSON.stringify(value)).catch(() => undefined)
+    void window.posDb.set(key, serializedValue).catch(() => undefined)
   }
 }
 
@@ -12944,6 +13008,7 @@ function normalizeSavedOrderPayment(order: SavedOrder): SavedOrder {
   const savedTables = parseDiningTableNames(legacyOrder.tables ?? getDiningTablesFromLabel(order.table))
   const discountMode = normalizeDiscountMode(legacyOrder.discountMode)
   const seatingMode = legacyOrder.seatingMode ? normalizeSeatingMode(legacyOrder.seatingMode) : savedTables.length > 1 ? 'group' : 'individual'
+  const orderType: OrderType = orderTypes.includes(order.orderType) ? order.orderType : 'Dining'
   const paymentMethod = normalizePaymentMethod(legacyOrder.paymentMethod)
   const fallbackReceived = Number(legacyOrder.amountReceived ?? legacyOrder.totals?.paid ?? 0)
   const paymentBreakdown: PaymentBreakdown = {
@@ -12970,6 +13035,7 @@ function normalizeSavedOrderPayment(order: SavedOrder): SavedOrder {
 
   return {
     ...order,
+    orderType,
     customerId: order.customerId || undefined,
     serviceStaffId: String(legacyOrder.serviceStaffId ?? '').trim() || undefined,
     serviceStaffName: String(legacyOrder.serviceStaffName ?? '').trim(),
