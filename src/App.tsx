@@ -79,6 +79,7 @@ type AppView =
   | 'keyboard_shortcuts'
 type ReportPeriodMode = 'custom' | 'monthly' | 'yearly'
 type DiscountMode = 'percent' | 'amount'
+type BillNumberResetFrequency = 'daily' | 'monthly' | 'yearly'
 type ShortcutScope = 'global' | 'home' | 'pos'
 type ShortcutActionId =
   | 'global-lock'
@@ -93,6 +94,7 @@ type ShortcutActionId =
   | 'pos-kot'
   | 'pos-new-order'
   | 'pos-orders'
+  | 'pos-find-bill'
 type StaffPermission =
   | 'pos_access'
   | 'reports'
@@ -143,6 +145,13 @@ type MenuItem = {
   available?: boolean
   unavailableReason?: string
   taxRate?: number
+  variants?: MenuItemVariant[]
+}
+
+type MenuItemVariant = {
+  id: string
+  name: string
+  price: number
 }
 
 type ExpensePaymentMethod = 'Cash' | 'Bank'
@@ -303,6 +312,7 @@ type ItemDraft = {
   available: boolean
   unavailableReason: string
   taxRate: string
+  variants: MenuItemVariant[]
 }
 
 type ExpenseDraft = {
@@ -341,6 +351,8 @@ type ReportPrintOptions = {
 
 type AppConfiguration = {
   showServiceStaffSelector: boolean
+  autoLogoutMinutes: number | null
+  billNumberResetFrequency: BillNumberResetFrequency
   enabledPaymentMethods: Record<ConfigurablePaymentMethod, boolean>
   reportPrintOptions: ReportPrintOptions
 }
@@ -687,7 +699,6 @@ const allStaffPermissionIds = staffPermissions.map((permission) => permission.id
 const defaultCashierPermissions: StaffPermission[] = ['pos_access']
 const maxLoginAttempts = 5
 const loginLockMs = 2 * 60 * 1000
-const idleLockMs = 10 * 60 * 1000
 const autoSyncIntervalMs = 60 * 1000
 const autoSyncStartupDelayMs = 5 * 1000
 
@@ -829,6 +840,8 @@ const defaultReportPrintOptions: ReportPrintOptions = {
 
 const defaultAppConfiguration: AppConfiguration = {
   showServiceStaffSelector: true,
+  autoLogoutMinutes: 10,
+  billNumberResetFrequency: 'yearly',
   enabledPaymentMethods: {
     UPI: true,
     Card: true,
@@ -951,7 +964,17 @@ const defaultKeyboardShortcuts: KeyboardShortcutDefinition[] = [
     description: 'Open the order list.',
     permission: 'pos_access',
   },
+  {
+    id: 'pos-find-bill',
+    scope: 'pos',
+    key: 'F',
+    action: 'Find Bill',
+    description: 'Focus bill-number search for today.',
+    permission: 'pos_access',
+  },
 ]
+
+const commonVariantNames = ['Full', 'Half', 'Quarter', 'Single', 'Double', 'Small', 'Large']
 
 const initialCart: CartLine[] = []
 
@@ -1001,8 +1024,12 @@ function App() {
   )
   const [currentDate, setCurrentDate] = useState(() => new Date())
   const [activeOrderId, setActiveOrderId] = useState(() => createOrderId())
-  const [billNumber, setBillNumber] = useState(() => getInitialBillNumber(savedOrders))
-  const [billFinancialYear, setBillFinancialYear] = useState(() => getFinancialYearKey(new Date()))
+  const [billNumber, setBillNumber] = useState(() =>
+    getInitialBillNumber(savedOrders, new Date(), appConfiguration.billNumberResetFrequency),
+  )
+  const [billResetPeriodKey, setBillResetPeriodKey] = useState(() =>
+    getBillResetPeriodKey(new Date(), appConfiguration.billNumberResetFrequency),
+  )
   const [activeCategory, setActiveCategory] = useState('bread')
   const [activeQuickTag, setActiveQuickTag] = useState<ItemTag | null>(null)
   const [search, setSearch] = useState('')
@@ -1050,7 +1077,12 @@ function App() {
   const [discountEditorOpen, setDiscountEditorOpen] = useState(false)
   const [orderListMode, setOrderListMode] = useState<OrderListMode | null>(null)
   const [orderListDate, setOrderListDate] = useState(() => formatDateInputValue(new Date()))
+  const [orderListTypeFilter, setOrderListTypeFilter] = useState<'all' | OrderType>('all')
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([])
+  const [deleteOrdersConfirmOpen, setDeleteOrdersConfirmOpen] = useState(false)
+  const [deleteOrdersPin, setDeleteOrdersPin] = useState('')
+  const [deleteOrdersError, setDeleteOrdersError] = useState('')
+  const [posBillSearch, setPosBillSearch] = useState('')
   const [reportOpen, setReportOpen] = useState(false)
   const [reportExportMenuOpen, setReportExportMenuOpen] = useState(false)
   const [reportPrintDate, setReportPrintDate] = useState(() => formatDateInputValue(new Date()))
@@ -1094,7 +1126,11 @@ function App() {
     available: true,
     unavailableReason: '',
     taxRate: '',
+    variants: [],
   }))
+  const [variantEditorOpen, setVariantEditorOpen] = useState(false)
+  const [variantPickerItem, setVariantPickerItem] = useState<MenuItem | null>(null)
+  const [customVariantName, setCustomVariantName] = useState('')
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null)
   const [expenseDraft, setExpenseDraft] = useState<ExpenseDraft>(() => ({
     date: formatDateInputValue(new Date()),
@@ -1151,6 +1187,7 @@ function App() {
   const qrOrdersRef = useRef(qrOrders)
   const runCloudSyncRef = useRef<(trigger: 'manual' | 'auto') => Promise<boolean>>(async () => false)
   const shortcutActionRunnerRef = useRef<(actionId: ShortcutActionId) => void>(() => undefined)
+  const posBillSearchInputRef = useRef<HTMLInputElement | null>(null)
   const refreshLocalServerStatus = useCallback(async () => {
     if (!window.posServer) {
       setLocalServerStatus({
@@ -1363,10 +1400,13 @@ function App() {
       orders = savedOrders.filter((order) => order.status === 'hold')
     } else if (orderListMode === 'orders') {
       orders = savedOrders.filter((order) => isSameBusinessDay(order.createdAt, selectedOrderListDay))
+      if (orderListTypeFilter !== 'all') {
+        orders = orders.filter((order) => order.orderType === orderListTypeFilter)
+      }
     }
 
     return [...orders].sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime())
-  }, [orderListMode, savedOrders, selectedOrderListDay])
+  }, [orderListMode, orderListTypeFilter, savedOrders, selectedOrderListDay])
   const visibleOrderIds = useMemo(() => visibleOrders.map((order) => order.id), [visibleOrders])
   const visibleOrdersTotal = useMemo(
     () => roundMoney(visibleOrders.reduce((sum, order) => sum + order.totals.total, 0)),
@@ -1884,8 +1924,8 @@ function App() {
         setPrinterProfiles(loadedPrinterProfiles)
         setBillPrinterProfileId(loadedBillPrinterProfileId)
         setActivePrinterProfileId(loadedActivePrinterProfileId)
-        setBillNumber(getInitialBillNumber(loadedOrders))
-        setBillFinancialYear(getFinancialYearKey(new Date()))
+        setBillNumber(getInitialBillNumber(loadedOrders, new Date(), loadedAppConfiguration.billNumberResetFrequency))
+        setBillResetPeriodKey(getBillResetPeriodKey(new Date(), loadedAppConfiguration.billNumberResetFrequency))
         setTheme(loadedTheme === 'dark' ? 'dark' : 'light')
         setKeyboardShortcutsEnabled(loadedKeyboardShortcutsEnabled)
         setLocalDatabasePath(snapshot.path)
@@ -2109,16 +2149,16 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const currentFinancialYear = getFinancialYearKey(currentDate)
-    if (currentFinancialYear === billFinancialYear) {
+    const currentResetPeriodKey = getBillResetPeriodKey(currentDate, appConfiguration.billNumberResetFrequency)
+    if (currentResetPeriodKey === billResetPeriodKey) {
       return
     }
 
-    setBillFinancialYear(currentFinancialYear)
+    setBillResetPeriodKey(currentResetPeriodKey)
     if (!cart.length) {
-      setBillNumber(getInitialBillNumber(savedOrders, currentDate))
+      setBillNumber(getInitialBillNumber(savedOrders, currentDate, appConfiguration.billNumberResetFrequency))
     }
-  }, [billFinancialYear, cart.length, currentDate, savedOrders])
+  }, [appConfiguration.billNumberResetFrequency, billResetPeriodKey, cart.length, currentDate, savedOrders])
 
   useEffect(() => {
     if (!window.posUpdater) {
@@ -2240,7 +2280,8 @@ function App() {
   ])
 
   useEffect(() => {
-    if (!currentUser) {
+    const autoLogoutMinutes = appConfiguration.autoLogoutMinutes
+    if (!currentUser || autoLogoutMinutes === null) {
       return
     }
 
@@ -2252,7 +2293,7 @@ function App() {
         setLoginPin('')
         setLoginError('App locked after idle timeout')
         setActiveView('home')
-      }, idleLockMs)
+      }, autoLogoutMinutes * 60 * 1000)
     }
     const events = ['pointerdown', 'keydown', 'touchstart']
 
@@ -2263,7 +2304,7 @@ function App() {
       window.clearTimeout(idleTimer)
       events.forEach((eventName) => window.removeEventListener(eventName, resetIdleTimer))
     }
-  }, [currentUser])
+  }, [appConfiguration.autoLogoutMinutes, currentUser])
 
   shortcutActionRunnerRef.current = (actionId: ShortcutActionId) => {
     if (actionId === 'global-lock') {
@@ -2290,6 +2331,9 @@ function App() {
       newOrder()
     } else if (actionId === 'pos-orders') {
       openOrderList('orders')
+    } else if (actionId === 'pos-find-bill') {
+      posBillSearchInputRef.current?.focus()
+      posBillSearchInputRef.current?.select()
     }
   }
 
@@ -4027,8 +4071,8 @@ function App() {
               ? (change.value as SavedOrder[]).map(normalizeSavedOrderPayment)
               : []
             setSavedOrders(restoredOrders)
-            setBillNumber(getInitialBillNumber(restoredOrders))
-            setBillFinancialYear(getFinancialYearKey(new Date()))
+            setBillNumber(getInitialBillNumber(restoredOrders, new Date(), appConfiguration.billNumberResetFrequency))
+            setBillResetPeriodKey(getBillResetPeriodKey(new Date(), appConfiguration.billNumberResetFrequency))
           }
           break
         case openingCashStorageKey:
@@ -4332,7 +4376,7 @@ function App() {
         }
       : {
           id: createOrderId(),
-          billNo: String(getInitialBillNumber(sourceOrders)),
+          billNo: String(getInitialBillNumber(sourceOrders, new Date(), appConfiguration.billNumberResetFrequency)),
           status: 'unclosed' as OrderStatus,
           orderType: 'Dining' as OrderType,
           table: currentQrOrder.table,
@@ -4479,9 +4523,53 @@ function App() {
     setMenuDisplaySettings(defaultMenuDisplaySettings)
   }
 
+  function toggleDraftVariant(name: string) {
+    const normalizedName = name.trim()
+    if (!normalizedName) {
+      return
+    }
+
+    setItemDraft((draft) => {
+      const exists = draft.variants.some((variant) => variant.name.toLowerCase() === normalizedName.toLowerCase())
+      if (exists) {
+        return { ...draft, variants: draft.variants.filter((variant) => variant.name.toLowerCase() !== normalizedName.toLowerCase()) }
+      }
+
+      const defaultPrice = Number.isFinite(Number(draft.price)) ? Math.max(0, Number(draft.price)) : 0
+      return {
+        ...draft,
+        variants: [...draft.variants, { id: makeUniqueId(slugify(normalizedName), draft.variants.map((variant) => variant.id)), name: normalizedName, price: defaultPrice }],
+      }
+    })
+  }
+
+  function updateDraftVariantPrice(variantId: string, value: string) {
+    setItemDraft((draft) => ({
+      ...draft,
+      variants: draft.variants.map((variant) =>
+        variant.id === variantId ? { ...variant, price: Math.max(0, numberFromInput(value)) } : variant,
+      ),
+    }))
+  }
+
+  function addCustomDraftVariant() {
+    const name = customVariantName.trim()
+    if (!name || itemDraft.variants.some((variant) => variant.name.toLowerCase() === name.toLowerCase())) {
+      return
+    }
+
+    toggleDraftVariant(name)
+    setCustomVariantName('')
+  }
+
   function addItem(item: MenuItem) {
     if (!isMenuItemAvailable(item)) {
       setPrinterStatus(`${item.name} is unavailable${item.unavailableReason ? `: ${item.unavailableReason}` : ''}`)
+      return
+    }
+
+    if (item.variants?.length) {
+      setVariantPickerItem(item)
       return
     }
 
@@ -4515,12 +4603,14 @@ function App() {
     )
   }
 
-  function addItemWithPrice(item: MenuItem, price: number, mergeSamePrice = true) {
+  function addItemWithPrice(item: MenuItem, price: number, mergeSamePrice = true, variantName = '') {
     const itemPrice = roundMoney(Math.max(0, price))
+    const cartItemId = variantName ? `${item.id}:${slugify(variantName)}` : item.id
+    const cartItemName = variantName ? `${item.name} - ${variantName}` : item.name
 
     setCart((lines) => {
       const existing = mergeSamePrice
-        ? lines.find((line) => line.itemId === item.id && line.price === itemPrice && !line.description)
+        ? lines.find((line) => line.itemId === cartItemId && line.price === itemPrice && !line.description)
         : null
 
       if (existing) {
@@ -4530,9 +4620,9 @@ function App() {
       return [
         ...lines,
         {
-          id: `line-${item.id}-${Date.now()}`,
-          itemId: item.id,
-          name: item.name,
+          id: `line-${cartItemId}-${Date.now()}`,
+          itemId: cartItemId,
+          name: cartItemName,
           category: item.category,
           price: itemPrice,
           qty: 1,
@@ -4683,13 +4773,14 @@ function App() {
     setOrderType('Dining')
     setActiveOrderId(createOrderId())
     if (advanceBill) {
-      const currentFinancialYear = getFinancialYearKey(new Date())
-      setBillFinancialYear(currentFinancialYear)
+      const currentResetPeriodKey = getBillResetPeriodKey(new Date(), appConfiguration.billNumberResetFrequency)
+      setBillResetPeriodKey(currentResetPeriodKey)
       setBillNumber((value) =>
         getNextBillNumber(
           savedOrdersRef.current,
-          billFinancialYear === currentFinancialYear ? value : firstBillNumber - 1,
+          billResetPeriodKey === currentResetPeriodKey ? value : firstBillNumber - 1,
           new Date(),
+          appConfiguration.billNumberResetFrequency,
         ),
       )
     }
@@ -4890,6 +4981,28 @@ function App() {
       return
     }
 
+    setDeleteOrdersPin('')
+    setDeleteOrdersError('')
+    setDeleteOrdersConfirmOpen(true)
+  }
+
+  async function confirmDeleteSelectedOrders() {
+    if (!currentUser) {
+      setDeleteOrdersError('Login required to delete orders')
+      return
+    }
+
+    if (!deleteOrdersPin) {
+      setDeleteOrdersError('Enter your PIN to confirm deletion')
+      return
+    }
+
+    if (!(await verifyPin(deleteOrdersPin, currentUser.pinSalt, currentUser.pinHash))) {
+      setDeleteOrdersPin('')
+      setDeleteOrdersError('Incorrect PIN. Orders were not deleted.')
+      return
+    }
+
     const billList = selectedVisibleOrders
       .map((order) => `#${order.billNo}`)
       .slice(0, 6)
@@ -4897,13 +5010,11 @@ function App() {
     const extraCount = Math.max(0, selectedVisibleOrders.length - 6)
     const label = `${selectedVisibleOrders.length} order(s) (${billList}${extraCount ? ` +${extraCount} more` : ''})`
 
-    if (!window.confirm(`Delete selected ${label}? This cannot be undone.`)) {
-      return
-    }
-
     const selectedIds = new Set(selectedVisibleOrders.map((order) => order.id))
     setSavedOrders((orders) => orders.filter((order) => !selectedIds.has(order.id)))
     setSelectedOrderIds([])
+    setDeleteOrdersConfirmOpen(false)
+    setDeleteOrdersPin('')
     recordAudit('orders_deleted', `${label} deleted / ${money(selectedOrdersTotal)}`)
   }
 
@@ -5298,31 +5409,32 @@ function App() {
     const imageDataUrl = itemDraft.imageDataUrl || undefined
     const available = itemDraft.available
     const unavailableReason = itemDraft.available ? undefined : itemDraft.unavailableReason.trim() || undefined
+    const variants = normalizeMenuItemVariants(itemDraft.variants)
 
     if (!name) {
       setPrinterStatus('Enter item name')
       return
     }
 
-    if (!priceInput || !Number.isFinite(price) || price < 0) {
-      setPrinterStatus('Enter item price, or 0 for open price')
+    if (!variants.length && (!priceInput || !Number.isFinite(price) || price < 0)) {
+      setPrinterStatus('Enter item price, or add at least one variant price')
       return
     }
 
-    const itemPrice = roundMoney(price)
+    const itemPrice = variants.length ? variants[0].price : roundMoney(price)
     const taxRate = itemDraft.taxRate.trim() === '' ? businessProfile.defaultGstRate : (Number(itemDraft.taxRate) || 0)
 
     if (editingItemId) {
       setMenuList((list) =>
         list.map((item) =>
           item.id === editingItemId
-            ? { ...item, name, price: itemPrice, category, tags, imageDataUrl, available, unavailableReason, taxRate }
+            ? { ...item, name, price: itemPrice, category, tags, imageDataUrl, available, unavailableReason, taxRate, variants }
             : item,
         ),
       )
     } else {
       const id = makeUniqueId(name, menuList.map((item) => item.id))
-      setMenuList((list) => [...list, { id, name, category, price: itemPrice, tags, imageDataUrl, available, unavailableReason, taxRate }])
+      setMenuList((list) => [...list, { id, name, category, price: itemPrice, tags, imageDataUrl, available, unavailableReason, taxRate, variants }])
       setActiveCategory(category)
     }
 
@@ -5342,6 +5454,7 @@ function App() {
       available: item.available !== false,
       unavailableReason: item.unavailableReason ?? '',
       taxRate: String(item.taxRate ?? 0),
+      variants: normalizeMenuItemVariants(item.variants),
     })
   }
 
@@ -5371,6 +5484,7 @@ function App() {
       available: true,
       unavailableReason: '',
       taxRate: '',
+      variants: [],
     })
   }
 
@@ -6269,9 +6383,30 @@ function App() {
   function openOrderList(mode: OrderListMode) {
     if (mode === 'orders') {
       setOrderListDate(formatDateInputValue(new Date()))
+      setOrderListTypeFilter('all')
     }
 
     setOrderListMode(mode)
+  }
+
+  function openBillFromPosSearch() {
+    const billSearch = posBillSearch.trim()
+    if (!billSearch) {
+      setPrinterStatus('Enter a bill number to open it')
+      return
+    }
+
+    const matchedOrder = savedOrders
+      .filter((order) => isSameBusinessDay(order.createdAt || order.updatedAt, currentDate) && String(order.billNo) === billSearch)
+      .sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime())[0]
+
+    if (matchedOrder) {
+      loadOrder(matchedOrder)
+      setPosBillSearch('')
+      return
+    }
+
+    setPrinterStatus(`Bill #${billSearch} was not found for today`)
   }
 
   if (!storageReady) {
@@ -6946,32 +7081,47 @@ function App() {
                   </span>
                 </div>
               </label>
-              <div className="configuration-flow-preview">
-                <div className="section-title">
-                  <div>
-                    <strong>Current Billing Flow</strong>
-                    <span>{appConfiguration.showServiceStaffSelector ? 'Table, then staff, then payment' : 'Table, then payment'}</span>
-                  </div>
+              <label className="configuration-option configuration-select-option">
+                <div>
+                  <strong>Auto logout</strong>
+                  <span>Lock the app after no activity. Staff must enter their PIN to continue.</span>
                 </div>
-                <div className="configuration-summary">
-                  <div>
-                    <span>Dining table</span>
-                    <strong>Required</strong>
-                  </div>
-                  <div>
-                    <span>Staff selection</span>
-                    <strong>{appConfiguration.showServiceStaffSelector ? 'Enabled' : 'Hidden'}</strong>
-                  </div>
-                  <div>
-                    <span>Print bill</span>
-                    <strong>Ready</strong>
-                  </div>
-                  <div>
-                    <span>Payment options</span>
-                    <strong>{enabledPosPaymentMethods.length} enabled</strong>
-                  </div>
+                <select
+                  value={appConfiguration.autoLogoutMinutes === null ? 'never' : String(appConfiguration.autoLogoutMinutes)}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value
+                    const minutes = value === 'never' ? null : Number(value)
+                    updateAppConfiguration((settings) => ({ ...settings, autoLogoutMinutes: minutes }))
+                    setPrinterStatus(minutes === null ? 'Auto logout disabled' : `Auto logout set to ${minutes} minutes`)
+                  }}
+                >
+                  <option value="1">After 1 minute</option>
+                  <option value="5">After 5 minutes</option>
+                  <option value="10">After 10 minutes</option>
+                  <option value="15">After 15 minutes</option>
+                  <option value="30">After 30 minutes</option>
+                  <option value="60">After 1 hour</option>
+                  <option value="never">Never</option>
+                </select>
+              </label>
+              <label className="configuration-option configuration-select-option">
+                <div>
+                  <strong>Bill number reset</strong>
+                  <span>Choose when the bill sequence starts again from 1. Existing bills keep their original number and date.</span>
                 </div>
-              </div>
+                <select
+                  value={appConfiguration.billNumberResetFrequency}
+                  onChange={(event) => {
+                    const frequency = event.currentTarget.value as BillNumberResetFrequency
+                    updateAppConfiguration((settings) => ({ ...settings, billNumberResetFrequency: frequency }))
+                    setPrinterStatus(`Bill number reset set to ${frequency}`)
+                  }}
+                >
+                  <option value="daily">Daily</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="yearly">Yearly</option>
+                </select>
+              </label>
             </section>
 
             <section className="home-card configuration-card">
@@ -8940,9 +9090,11 @@ function App() {
                     </span>
                   )}
                   {unavailable && <span className="availability-badge">Sold Out</span>}
-                  <span className={item.price <= 0 ? 'price open-price-label' : 'price'}>
-                    {item.price <= 0 ? 'Open Price' : `Rs. ${item.price.toFixed(2)}`}
-                  </span>
+                  {!item.variants?.length && (
+                    <span className={item.price <= 0 ? 'price open-price-label' : 'price'}>
+                      {item.price <= 0 ? 'Open Price' : `Rs. ${item.price.toFixed(2)}`}
+                    </span>
+                  )}
                   <span className="item-name">{item.name}</span>
                 </button>
               )
@@ -8965,12 +9117,34 @@ function App() {
             ))}
           </div>
 
-          <div className="bill-head">
-            <div className="bill-number-head">
-              <span>Bill#</span>
-              <strong>{billNumber}</strong>
-            </div>
-            <button
+            <div className="bill-head">
+              <div className="bill-number-head">
+                <span>Bill#</span>
+                <strong>{billNumber}</strong>
+              </div>
+              <div className="pos-bill-search" title="Open a bill from today">
+                <Search size={16} />
+                <input
+                  ref={posBillSearchInputRef}
+                  type="number"
+                  min="1"
+                  inputMode="numeric"
+                  aria-label="Find today's bill number"
+                  placeholder="Find bill #"
+                  value={posBillSearch}
+                  onChange={(event) => setPosBillSearch(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      openBillFromPosSearch()
+                    }
+                  }}
+                />
+                <button type="button" onClick={openBillFromPosSearch} aria-label="Open bill" title="Open bill">
+                  Open
+                </button>
+              </div>
+              <button
               type="button"
               className="icon-action"
               title="Seating"
@@ -10277,21 +10451,45 @@ function App() {
             </div>
 
             {orderListMode === 'orders' && (
+              <>
               <div className="orders-date-filter">
-                <label>
-                  Bill Date
-                  <input
-                    type="date"
-                    value={orderListDate}
-                    onChange={(event) => setOrderListDate(event.currentTarget.value)}
-                  />
-                </label>
+                <div className="orders-filter-fields">
+                  <label>
+                    Bill Date
+                    <input
+                      type="date"
+                      value={orderListDate}
+                      onChange={(event) => setOrderListDate(event.currentTarget.value)}
+                    />
+                  </label>
+                </div>
                 <div className="orders-total-summary">
                   <span>{formatDate(selectedOrderListDay)}</span>
                   <strong>Total {money(visibleOrdersTotal)}</strong>
                   <small>Selected {selectedVisibleOrders.length} / {money(selectedOrdersTotal)}</small>
                 </div>
               </div>
+
+              <div className="orders-type-filter" aria-label="Order type filter">
+                <button
+                  className={orderListTypeFilter === 'all' ? 'active' : ''}
+                  type="button"
+                  onClick={() => setOrderListTypeFilter('all')}
+                >
+                  All
+                </button>
+                {orderTypes.map((type) => (
+                  <button
+                    className={orderListTypeFilter === type ? 'active' : ''}
+                    type="button"
+                    key={type}
+                    onClick={() => setOrderListTypeFilter(type)}
+                  >
+                    {type}
+                  </button>
+                ))}
+              </div>
+              </>
             )}
 
             <div className="orders-select-toolbar">
@@ -10354,6 +10552,64 @@ function App() {
               ))}
 
               {!visibleOrders.length && <div className="empty-list">No orders found</div>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteOrdersConfirmOpen && (
+        <div className="modal-layer access-prompt-layer" role="dialog" aria-modal="true" aria-label="Confirm order deletion">
+          <div className="quick-panel access-prompt-panel delete-orders-confirm-panel">
+            <div className="panel-head">
+              <div>
+                <strong>Confirm Order Deletion</strong>
+                <span>{selectedVisibleOrders.length} selected bill(s)</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteOrdersConfirmOpen(false)
+                  setDeleteOrdersPin('')
+                  setDeleteOrdersError('')
+                }}
+                title="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="access-prompt-body">
+              <div className="access-prompt-icon">
+                <Trash2 size={22} />
+              </div>
+              <div>
+                <strong>This action cannot be undone</strong>
+                <p>Enter your PIN to permanently delete the selected orders.</p>
+              </div>
+            </div>
+            <label className="dialog-field">
+              Confirm with your PIN
+              <input
+                type="password"
+                inputMode="numeric"
+                autoFocus
+                value={deleteOrdersPin}
+                onChange={(event) => setDeleteOrdersPin(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    void confirmDeleteSelectedOrders()
+                  }
+                }}
+              />
+            </label>
+            {deleteOrdersError && <div className="form-error">{deleteOrdersError}</div>}
+            <div className="panel-actions">
+              <button className="small-button" type="button" onClick={() => setDeleteOrdersConfirmOpen(false)}>
+                Cancel
+              </button>
+              <button className="small-button danger" type="button" onClick={() => void confirmDeleteSelectedOrders()}>
+                <Trash2 size={16} />
+                Delete Orders
+              </button>
             </div>
           </div>
         </div>
@@ -10596,23 +10852,42 @@ function App() {
                       ))}
                     </select>
                   </label>
-                  <label>
-                    Price
-                    <input
-                      type="number"
-                      min="0"
-                      value={itemDraft.price}
-                      onChange={(event) => {
-                        const value = event.currentTarget.value
-                        setItemDraft((draft) => ({ ...draft, price: value }))
+                  {!itemDraft.variants.length && (
+                    <label>
+                      Price
+                      <input
+                        type="number"
+                        min="0"
+                        value={itemDraft.price}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value
+                          setItemDraft((draft) => ({ ...draft, price: value }))
+                        }}
+                      />
+                      {itemDraft.price.trim() !== '' && Number(itemDraft.price) === 0 && (
+                        <span className="item-price-help">
+                          Zero price item will ask amount before adding to cart.
+                        </span>
+                      )}
+                    </label>
+                  )}
+                  <div className="variant-field wide-field">
+                    <div>
+                      <span>Variants</span>
+                      <small>{itemDraft.variants.length ? `${itemDraft.variants.length} option(s) configured` : 'Add sizes such as Half and Quarter'}</small>
+                    </div>
+                    <button
+                      className="small-button"
+                      type="button"
+                      onClick={() => {
+                        setCustomVariantName('')
+                        setVariantEditorOpen(true)
                       }}
-                    />
-                    {itemDraft.price.trim() !== '' && Number(itemDraft.price) === 0 && (
-                      <span className="item-price-help">
-                        Zero price item will ask amount before adding to cart.
-                      </span>
-                    )}
-                  </label>
+                    >
+                      <Plus size={16} />
+                      {itemDraft.variants.length ? 'Edit Variants' : 'Add Variants'}
+                    </button>
+                  </div>
                   <label>
                     GST Rate (%)
                     <input
@@ -10701,7 +10976,7 @@ function App() {
                           {item.imageDataUrl ? <img src={item.imageDataUrl} alt="" /> : <ImagePlus size={14} />}
                         </span>
                         <span>{item.name}</span>
-                        <strong>{item.price <= 0 ? 'Open Price' : `Rs. ${item.price.toFixed(2)}`}</strong>
+                        <strong>{item.variants?.length ? `${item.variants.length} variants` : item.price <= 0 ? 'Open Price' : `Rs. ${item.price.toFixed(2)}`}</strong>
                       </button>
                       <button
                         type="button"
@@ -11167,6 +11442,107 @@ function App() {
           </div>
 
         </section>
+      )}
+
+      {variantEditorOpen && (
+        <div className="modal-layer" role="dialog" aria-modal="true" aria-label="Item variants">
+          <div className="quick-panel variant-editor-panel">
+            <div className="panel-head">
+              <div>
+                <strong>Item Variants</strong>
+                <span>Select all sizes sold for {itemDraft.name.trim() || 'this item'}</span>
+              </div>
+              <button type="button" onClick={() => setVariantEditorOpen(false)} title="Close">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="variant-choice-grid">
+              {commonVariantNames.map((name) => {
+                const active = itemDraft.variants.some((variant) => variant.name.toLowerCase() === name.toLowerCase())
+                return (
+                  <button className={active ? 'active' : ''} type="button" key={name} onClick={() => toggleDraftVariant(name)}>
+                    {active ? 'Selected' : 'Add'} {name}
+                  </button>
+                )
+              })}
+            </div>
+            <div className="variant-custom-add">
+              <input
+                placeholder="Custom variant name"
+                value={customVariantName}
+                onChange={(event) => setCustomVariantName(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    addCustomDraftVariant()
+                  }
+                }}
+              />
+              <button className="small-button" type="button" onClick={addCustomDraftVariant}>
+                <Plus size={16} /> Add
+              </button>
+            </div>
+            <div className="variant-price-list">
+              {itemDraft.variants.length ? (
+                itemDraft.variants.map((variant) => (
+                  <div className="variant-price-row" key={variant.id}>
+                    <strong>{variant.name}</strong>
+                    <label>
+                      Price
+                      <input
+                        type="number"
+                        min="0"
+                        value={variant.price}
+                        onChange={(event) => updateDraftVariantPrice(variant.id, event.currentTarget.value)}
+                      />
+                    </label>
+                    <button className="small-button icon-only" type="button" onClick={() => toggleDraftVariant(variant.name)} title={`Remove ${variant.name}`}>
+                      <X size={16} />
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <div className="empty-list">Select one or more variants to set their prices.</div>
+              )}
+            </div>
+            <div className="panel-actions">
+              <button className="small-button primary" type="button" onClick={() => setVariantEditorOpen(false)}>
+                <Save size={16} /> Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {variantPickerItem && (
+        <div className="modal-layer" role="dialog" aria-modal="true" aria-label="Choose item variant">
+          <div className="quick-panel variant-picker-panel">
+            <div className="panel-head">
+              <div>
+                <strong>{variantPickerItem.name}</strong>
+                <span>Choose a size to add</span>
+              </div>
+              <button type="button" onClick={() => setVariantPickerItem(null)} title="Close">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="variant-picker-list">
+              {variantPickerItem.variants?.map((variant) => (
+                <button
+                  type="button"
+                  key={variant.id}
+                  onClick={() => {
+                    addItemWithPrice(variantPickerItem, variant.price, true, variant.name)
+                    setVariantPickerItem(null)
+                  }}
+                >
+                  <span>{variant.name}</span>
+                  <strong>{money(variant.price)}</strong>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
 
       {accessPrompt && (
@@ -12269,6 +12645,7 @@ function normalizeMenuItems(items: MenuItem[]) {
     const id = String(item.id ?? '').trim() || `${slugify(name)}-${index + 1}`
     const tags = Array.isArray(item.tags) ? normalizeTags(item.tags.join(', ')) : normalizeTags(String(item.tags ?? ''))
     const unavailableReason = String(item.unavailableReason ?? '').trim()
+    const variants = normalizeMenuItemVariants(item.variants)
 
     return {
       id,
@@ -12280,8 +12657,30 @@ function normalizeMenuItems(items: MenuItem[]) {
       available: item.available === false ? false : true,
       unavailableReason: item.available === false && unavailableReason ? unavailableReason : undefined,
       taxRate: Number(item.taxRate ?? 0) || 0,
+      variants,
     }
   })
+}
+
+function normalizeMenuItemVariants(variants: unknown): MenuItemVariant[] {
+  if (!Array.isArray(variants)) {
+    return []
+  }
+
+  const usedIds = new Set<string>()
+  return variants.reduce<MenuItemVariant[]>((result, variant, index) => {
+    const name = String((variant as Partial<MenuItemVariant>)?.name ?? '').trim()
+    const price = roundMoney(Number((variant as Partial<MenuItemVariant>)?.price))
+    if (!name || !Number.isFinite(price) || price < 0) {
+      return result
+    }
+
+    const baseId = slugify(String((variant as Partial<MenuItemVariant>)?.id || name)) || `variant-${index + 1}`
+    const id = makeUniqueId(baseId, [...usedIds])
+    usedIds.add(id)
+    result.push({ id, name, price })
+    return result
+  }, [])
 }
 
 function isMenuItemAvailable(item: MenuItem) {
@@ -12353,8 +12752,12 @@ function createPrinterProfileId() {
   return `printer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-function getInitialBillNumber(orders: SavedOrder[], referenceDate = new Date()) {
-  const highestSavedBill = getHighestBillNumber(orders, referenceDate)
+function getInitialBillNumber(
+  orders: SavedOrder[],
+  referenceDate = new Date(),
+  resetFrequency: BillNumberResetFrequency = defaultAppConfiguration.billNumberResetFrequency,
+) {
+  const highestSavedBill = getHighestBillNumber(orders, referenceDate, resetFrequency)
 
   if (highestSavedBill > 0) {
     return highestSavedBill + 1
@@ -12363,41 +12766,30 @@ function getInitialBillNumber(orders: SavedOrder[], referenceDate = new Date()) 
   return firstBillNumber
 }
 
-function getNextBillNumber(orders: SavedOrder[], currentBillNumber: number, referenceDate = new Date()) {
-  const highestSavedBill = getHighestBillNumber(orders, referenceDate)
+function getNextBillNumber(
+  orders: SavedOrder[],
+  currentBillNumber: number,
+  referenceDate = new Date(),
+  resetFrequency: BillNumberResetFrequency = defaultAppConfiguration.billNumberResetFrequency,
+) {
+  const highestSavedBill = getHighestBillNumber(orders, referenceDate, resetFrequency)
   return Math.max(currentBillNumber, highestSavedBill, firstBillNumber - 1) + 1
 }
 
-function getHighestBillNumber(orders: SavedOrder[], referenceDate = new Date()) {
+function getHighestBillNumber(orders: SavedOrder[], referenceDate = new Date(), resetFrequency: BillNumberResetFrequency = 'yearly') {
   return orders
-    .filter((order) => isOrderInsideFinancialYear(order, referenceDate))
+    .filter((order) => getBillResetPeriodKey(new Date(order.createdAt || order.updatedAt), resetFrequency) === getBillResetPeriodKey(referenceDate, resetFrequency))
     .reduce((highest, order) => Math.max(highest, Number(order.billNo) || 0), 0)
 }
 
-function isOrderInsideFinancialYear(order: SavedOrder, referenceDate = new Date()) {
-  const orderDate = new Date(order.createdAt || order.updatedAt)
-  if (!Number.isFinite(orderDate.getTime())) {
-    return false
+function getBillResetPeriodKey(value: Date, resetFrequency: BillNumberResetFrequency) {
+  if (resetFrequency === 'daily') {
+    return formatDateInputValue(value)
   }
-
-  const start = getFinancialYearStart(referenceDate)
-  const end = getFinancialYearEnd(referenceDate)
-  return orderDate >= start && orderDate <= end
-}
-
-function getFinancialYearStart(value: Date) {
-  const year = value.getMonth() >= 3 ? value.getFullYear() : value.getFullYear() - 1
-  return new Date(year, 3, 1, 0, 0, 0, 0)
-}
-
-function getFinancialYearEnd(value: Date) {
-  const start = getFinancialYearStart(value)
-  return new Date(start.getFullYear() + 1, 2, 31, 23, 59, 59, 999)
-}
-
-function getFinancialYearKey(value: Date) {
-  const start = getFinancialYearStart(value)
-  return `${start.getFullYear()}-${start.getFullYear() + 1}`
+  if (resetFrequency === 'monthly') {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}`
+  }
+  return String(value.getFullYear())
 }
 
 function buildReport(orders: SavedOrder[], period?: ReportPeriod, expenses: ExpenseEntry[] = []) {
@@ -13647,12 +14039,26 @@ function normalizeMenuDisplaySettings(settings: MenuDisplaySettings) {
 function normalizeAppConfiguration(settings: Partial<AppConfiguration> = {}) {
   const enabledPaymentMethods = settings.enabledPaymentMethods ?? defaultAppConfiguration.enabledPaymentMethods
   const reportPrintOptions = settings.reportPrintOptions ?? defaultReportPrintOptions
+  const autoLogoutMinutes =
+    settings.autoLogoutMinutes === null
+      ? null
+      : [1, 5, 10, 15, 30, 60].includes(Number(settings.autoLogoutMinutes))
+        ? Number(settings.autoLogoutMinutes)
+        : defaultAppConfiguration.autoLogoutMinutes
+  const billNumberResetFrequency: BillNumberResetFrequency =
+    settings.billNumberResetFrequency === 'daily' ||
+    settings.billNumberResetFrequency === 'monthly' ||
+    settings.billNumberResetFrequency === 'yearly'
+      ? settings.billNumberResetFrequency
+      : defaultAppConfiguration.billNumberResetFrequency
   return {
     ...defaultAppConfiguration,
     showServiceStaffSelector:
       typeof settings.showServiceStaffSelector === 'boolean'
         ? settings.showServiceStaffSelector
         : defaultAppConfiguration.showServiceStaffSelector,
+    autoLogoutMinutes,
+    billNumberResetFrequency,
     enabledPaymentMethods: {
       UPI: typeof enabledPaymentMethods.UPI === 'boolean' ? enabledPaymentMethods.UPI : defaultAppConfiguration.enabledPaymentMethods.UPI,
       Card: typeof enabledPaymentMethods.Card === 'boolean' ? enabledPaymentMethods.Card : defaultAppConfiguration.enabledPaymentMethods.Card,

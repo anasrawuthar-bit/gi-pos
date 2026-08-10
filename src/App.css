@@ -398,7 +398,7 @@ button {
 
 .bill-head {
   display: grid;
-  grid-template-columns: minmax(80px, 1fr) repeat(3, 76px);
+  grid-template-columns: minmax(72px, 1fr) minmax(156px, 190px) repeat(3, 76px);
   gap: 6px;
   align-items: center;
   padding: 7px 10px;
@@ -692,6 +692,37 @@ button {
   color: #9a3412;
 }
 
+.pos-bill-search {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.pos-bill-search svg {
+  color: #64748b;
+}
+
+.pos-bill-search input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 8px;
+}
+
+.pos-bill-search button {
+  height: 34px;
+  padding: 0 9px;
+  color: #0f6670;
+  background: #ecfeff;
+  border: 1px solid #9ed7dd;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
 .cash-total-hint strong {
   color: #0f766e;
   font-size: 16px;
@@ -967,7 +998,7 @@ button {
 }
 
 .orders-panel.has-date-filter {
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
 }
 
 .quick-panel {
@@ -2538,6 +2569,145 @@ button {
   opacity: 0.72;
 }
 
+.variant-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid #d7dce3;
+  border-radius: 7px;
+}
+
+.variant-field > div {
+  display: grid;
+  gap: 3px;
+}
+
+.variant-field span {
+  color: #111827;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.variant-field small {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.variant-editor-panel,
+.variant-picker-panel {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.variant-choice-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.variant-choice-grid button {
+  min-height: 34px;
+  padding: 0 11px;
+  color: #334155;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.variant-choice-grid button.active {
+  color: #ffffff;
+  background: #0f8b94;
+  border-color: #0f8b94;
+}
+
+.variant-custom-add {
+  display: flex;
+  gap: 8px;
+}
+
+.variant-custom-add input {
+  min-width: 0;
+  flex: 1;
+}
+
+.variant-price-list,
+.variant-picker-list {
+  display: grid;
+  gap: 8px;
+}
+
+.variant-price-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px 36px;
+  align-items: end;
+  gap: 10px;
+  padding: 9px;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 7px;
+}
+
+.variant-price-row strong {
+  align-self: center;
+  color: #111827;
+}
+
+.variant-price-row label {
+  display: grid;
+  gap: 4px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.variant-picker-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 50px;
+  padding: 0 14px;
+  color: #111827;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 7px;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.variant-picker-list button:hover {
+  border-color: #0f8b94;
+  background: #ecfeff;
+}
+
+.variant-picker-list strong {
+  color: #0f6670;
+  font-size: 16px;
+}
+
+.configuration-select-option {
+  grid-template-columns: minmax(0, 1fr) minmax(156px, 190px);
+  align-items: center;
+}
+
+.configuration-select-option select {
+  width: 100%;
+  height: 38px;
+  padding: 0 10px;
+  color: #111827;
+  background: #ffffff;
+  border: 1px solid #cfd5dd;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 800;
+}
+
 .report-configuration-layout {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -3574,6 +3744,13 @@ button {
   border-radius: 7px;
 }
 
+.orders-filter-fields {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .orders-date-filter label {
   min-width: 190px;
   display: grid;
@@ -3590,6 +3767,51 @@ button {
   border: 1px solid #cfd5dd;
   border-radius: 6px;
   padding: 0 10px;
+}
+
+.orders-bill-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.orders-bill-search input {
+  min-width: 136px;
+}
+
+.orders-bill-search .small-button {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+}
+
+.orders-type-filter {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border-bottom: 1px solid #d7dce3;
+}
+
+.orders-type-filter button {
+  min-height: 30px;
+  flex: 0 0 auto;
+  padding: 0 12px;
+  color: #475569;
+  background: #f8fafc;
+  border: 1px solid #d7dce3;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.orders-type-filter button.active {
+  color: #ffffff;
+  background: #0f8b94;
+  border-color: #0f8b94;
 }
 
 .orders-date-filter strong {
