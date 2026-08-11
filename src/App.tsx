@@ -2413,8 +2413,6 @@ function App() {
   const hasSubscriptionAccess = hasOfflineAccess || !subscriptionLock
   const localServerUrls = localServerStatus?.urls ?? []
   const localServerPrimaryUrl = localServerStatus?.primaryUrl || localServerUrls[0] || ''
-  const localDnsStatus = localServerStatus?.dns
-  const localDnsUrls = localDnsStatus?.urls ?? []
   const currentLicenseRows = useMemo(() => {
     if (hasOfflineAccess && offlineLicense) {
       return [
@@ -8591,17 +8589,8 @@ function App() {
                   <span>Database</span>
                   <strong>{localServerStatus?.dbPath || localDatabasePath ? 'SQLite Ready' : 'Not ready'}</strong>
                 </div>
-                <div>
-                  <span>Local DNS</span>
-                  <strong>{localDnsStatus?.enabled ? 'Running' : 'Not running'}</strong>
-                </div>
-                <div>
-                  <span>DNS IP</span>
-                  <strong>{localDnsStatus?.primaryIp || 'Not ready'}</strong>
-                </div>
               </div>
               {localServerStatus?.error && <div className="sync-message">{localServerStatus.error}</div>}
-              {localDnsStatus?.error && <div className="sync-message">{localDnsStatus.error}</div>}
             </section>
 
             <section className="home-card network-card">
@@ -8619,15 +8608,6 @@ function App() {
                     </button>
                   </div>
                 ))}
-                {localDnsUrls.map((url) => (
-                  <div className="server-url-row dns-url-row" key={url}>
-                    <Globe2 size={17} />
-                    <span>{url}</span>
-                    <button className="small-button" type="button" onClick={() => void copyLocalServerText(url)}>
-                      Copy
-                    </button>
-                  </div>
-                ))}
                 {!localServerUrls.length && !localServerPrimaryUrl && (
                   <div className="empty-list">Open this page inside the desktop app to see LAN address.</div>
                 )}
@@ -8635,46 +8615,7 @@ function App() {
               <div className="network-note">
                 Other computers or mobile devices can test the connection by opening the URL above. If it does not load,
                 allow this app in Windows Firewall and make sure all devices are on the same network.
-              </div>
-            </section>
-
-            <section className="home-card network-card network-wide-card">
-              <div className="section-title">
-                <strong>Local DNS Setup</strong>
-                <span>{localDnsStatus?.enabled ? 'Ready' : 'Needs setup'}</span>
-              </div>
-              <div className="server-url-list">
-                <div className="server-url-row">
-                  <Wifi size={17} />
-                  <span>
-                    Set phone/other PC DNS server to {localDnsStatus?.primaryIp || 'this Main PC IP'}
-                  </span>
-                  <button
-                    className="small-button"
-                    type="button"
-                    onClick={() => void copyLocalServerText(localDnsStatus?.primaryIp || '')}
-                    disabled={!localDnsStatus?.primaryIp}
-                  >
-                    Copy IP
-                  </button>
-                </div>
-                <div className="server-url-row">
-                  <Globe2 size={17} />
-                  <span>
-                    Use domain {localDnsStatus?.domains?.[0] || 'pos.local'} with port {localServerStatus?.port ?? 8080}
-                  </span>
-                  <button
-                    className="small-button"
-                    type="button"
-                    onClick={() => void copyLocalServerText(localDnsStatus?.domains?.[0] || 'pos.local')}
-                  >
-                    Copy Name
-                  </button>
-                </div>
-              </div>
-              <div className="network-note">
-                For easy address, set router DHCP DNS to the Main PC IP. If router access is not available, set DNS manually
-                on each client device. Unknown domains are forwarded to {localDnsStatus?.upstream || 'upstream DNS'} so internet browsing can continue.
+                The address is assigned by your router and can change after a router restart; reserve this Main PC IP in the router for a stable address.
               </div>
             </section>
 

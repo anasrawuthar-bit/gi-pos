@@ -27,3 +27,11 @@ cloud/updates
 *.sw?
 *.zip
 cloud with plan gold and premium.zip
+
+# Android / Gradle build output
+.gradle/
+**/.gradle/
+**/build/
+**/local.properties
+*.apk
+*.aab

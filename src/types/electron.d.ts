@@ -78,16 +78,6 @@ export type LocalServerStatus = {
   startedAt: string
   error: string
   dbPath: string
-  dns?: {
-    enabled: boolean
-    port: number
-    host: string
-    domains: string[]
-    urls: string[]
-    primaryIp: string
-    upstream: string
-    error: string
-  }
 }
 
 export type FoodImageSearchResult = {

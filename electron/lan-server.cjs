@@ -1,27 +1,18 @@
 const http = require('node:http');
 const os = require('node:os');
 const crypto = require('node:crypto');
-const dgram = require('node:dgram');
-const dns = require('node:dns');
 
 const preferredPort = Number(process.env.GI_POS_LAN_PORT || 8080);
-const preferredDnsPort = Number(process.env.GI_POS_DNS_PORT || 53);
 const maxPortAttempts = 20;
-const localDnsDomains = normalizeDnsDomains(process.env.GI_POS_DNS_NAMES || 'pos.local,gipos.local,gi.pos,restaurant.pos');
 
 async function createLanServer({ app, getDatabase, printKot }) {
   const startedAt = new Date().toISOString();
   let server;
-  let dnsServer;
   let port = preferredPort;
   let lastError = '';
-  let dnsError = '';
-  const upstreamDnsServers = getUpstreamDnsServers();
   const getStatus = () => {
     const addresses = getLanAddresses();
     const urls = addresses.map((address) => `http://${address}:${port}`);
-    const primaryIp = addresses[0] || '127.0.0.1';
-    const dnsUrls = localDnsDomains.map((domain) => `http://${domain}:${port}`);
 
     return {
       enabled: Boolean(server),
@@ -35,18 +26,6 @@ async function createLanServer({ app, getDatabase, printKot }) {
       startedAt: server ? startedAt : '',
       error: server ? '' : lastError || 'LAN server did not start',
       dbPath: getDatabase()?.path || '',
-      dns: {
-        enabled: Boolean(dnsServer),
-        port: preferredDnsPort,
-        host: '0.0.0.0',
-        domains: localDnsDomains,
-        urls: dnsUrls,
-        primaryIp,
-        upstream: upstreamDnsServers[0] || '',
-        error: dnsServer
-          ? ''
-          : dnsError || 'Local DNS is not running. IP address URLs still work.',
-      },
     };
   };
 
@@ -65,33 +44,10 @@ async function createLanServer({ app, getDatabase, printKot }) {
     }
   }
 
-  if (server) {
-    try {
-      dnsServer = await startLocalDnsServer({
-        domains: localDnsDomains,
-        port: preferredDnsPort,
-        getAddress: () => getLanAddresses()[0] || '127.0.0.1',
-        upstreamServers: upstreamDnsServers,
-        onError: (error) => {
-          dnsError = getLocalDnsErrorMessage(error);
-          dnsServer = null;
-        },
-      });
-      dnsError = '';
-    } catch (error) {
-      dnsError = getLocalDnsErrorMessage(error);
-    }
-  }
-
   return {
     getStatus,
     close: () =>
       new Promise((resolve) => {
-        if (dnsServer) {
-          dnsServer.close();
-          dnsServer = null;
-        }
-
         if (!server) {
           resolve();
           return;
@@ -455,7 +411,7 @@ function getLanAddresses() {
 
   for (const [name, values] of Object.entries(interfaces)) {
     for (const item of values || []) {
-      if (item.family === 'IPv4' && !item.internal) {
+      if (item.family === 'IPv4' && !item.internal && isReachableLanAddress(name, item.address)) {
         candidates.push({
           address: item.address,
           score: getAddressScore(name, item.address),
@@ -468,9 +424,23 @@ function getLanAddresses() {
     return ['127.0.0.1'];
   }
 
-  return candidates
+  return Array.from(
+    new Set(
+      candidates
     .sort((first, second) => second.score - first.score || first.address.localeCompare(second.address))
-    .map((candidate) => candidate.address);
+        .map((candidate) => candidate.address),
+    ),
+  );
+}
+
+function isReachableLanAddress(name, address) {
+  const normalizedName = String(name || '').toLowerCase();
+  const isVirtualAdapter = /(virtual|vethernet|vmware|virtualbox|docker|wsl|hyper-v|bluetooth|npcap|loopback|tailscale|zerotier)/.test(normalizedName);
+  const isHomeOrOfficeLan = /^(192\.168\.|10\.)/.test(address);
+
+  // 172.x addresses are commonly created by Docker, WSL, and Hyper-V. Do not
+  // publish them as customer-facing URLs; only reachable Wi-Fi/Ethernet URLs belong here.
+  return isHomeOrOfficeLan && !isVirtualAdapter;
 }
 
 function getAddressScore(name, address) {
@@ -580,13 +550,13 @@ function buildMobileAppHtml(status, pathname) {
       :root { color-scheme: light; --ink:#08111f; --muted:#64748b; --line:#d7e0e7; --soft:#f3f7fa; --teal:#0f8793; --red:#cb1137; --green:#138a43; }
       * { box-sizing: border-box; }
       body { margin: 0; min-height: 100vh; font-family: Arial, sans-serif; color: var(--ink); background: #eef3f5; }
-      header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; background: #fff; border-bottom: 1px solid var(--line); }
+      header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; background: #fff; border-bottom: 1px solid var(--line); box-shadow: 0 5px 16px rgba(15,23,42,.06); }
       .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
       .logo { width: 38px; height: 38px; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg, var(--red), var(--teal)); border-radius: 9px; font-weight: 950; }
       h1, h2, p { margin: 0; }
-      h1 { font-size: 17px; line-height: 1.1; }
+      h1 { font-size: 16px; line-height: 1.1; }
       small, p { color: var(--muted); font-weight: 800; }
-      main { max-width: 980px; margin: 0 auto; padding: 12px; }
+      main { max-width: 980px; margin: 0 auto; padding: 10px 12px 20px; }
       .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 30px rgba(15,23,42,.08); }
       .panel { padding: 14px; display: grid; gap: 12px; }
       .login-card { max-width: 440px; margin: 36px auto; }
@@ -595,7 +565,9 @@ function buildMobileAppHtml(status, pathname) {
       button { min-height: 46px; padding: 0 14px; border: 1px solid #cbd5e1; border-radius: 9px; background: #fff; color: var(--ink); font: inherit; font-weight: 950; }
       button.primary { color: #fff; background: var(--teal); border-color: var(--teal); }
       button.danger { color: #fff; background: var(--red); border-color: var(--red); }
-      .tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+      .tabs { display: flex; gap: 8px; margin-bottom: 10px; }
+      .tabs button { min-height: 40px; }
+      .tabs #posTab { flex: 1; }
       .tabs button.active { color: #fff; background: var(--red); border-color: var(--red); }
       .grid { display: grid; gap: 12px; }
       .home-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -612,6 +584,7 @@ function buildMobileAppHtml(status, pathname) {
       .category-strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
       .category-strip button { min-width: max-content; min-height: 40px; }
       .category-strip button.active { color: #fff; background: var(--red); border-color: var(--red); }
+      .menu-search { position: sticky; top: 60px; z-index: 3; height: 44px; background: #fff; box-shadow: 0 8px 16px rgba(15,23,42,.06); }
       .item-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
       .item-card { min-height: 88px; display: grid; align-content: space-between; text-align: left; }
       .item-card.unavailable { opacity: .62; cursor: not-allowed; background: #f8fafc; }
@@ -630,10 +603,33 @@ function buildMobileAppHtml(status, pathname) {
       .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
       .spacer { flex: 1; }
       @media (max-width: 760px) {
-        .pos-layout { grid-template-columns: 1fr; }
-        .order-toolbar { grid-template-columns: 1fr; }
-        .home-grid { grid-template-columns: 1fr; }
-        .cart-panel { position: sticky; bottom: 0; }
+        body { padding-bottom: 176px; }
+        main { padding: 8px 8px 18px; }
+        header { padding: 8px; }
+        .brand small { display: none; }
+        .logo { width: 34px; height: 34px; }
+        .tabs { position: sticky; top: 0; z-index: 4; padding: 4px 0 8px; background: #eef3f5; }
+        .tabs button { min-height: 38px; }
+        .pos-layout { display: block; }
+        .pos-layout > .card:first-child { padding: 10px; }
+        .order-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .order-toolbar label:last-child { grid-column: 1 / -1; }
+        .table-panel { padding: 8px; }
+        .table-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+        .table-grid button { min-height: 46px; padding: 0 4px; }
+        .category-strip { margin-top: 10px; }
+        .category-strip button { min-height: 38px; }
+        .menu-search { top: 50px; margin: 8px 0; }
+        .item-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+        .item-card { min-height: 82px; padding: 10px; }
+        .cart-panel { position: fixed; z-index: 10; right: 8px; bottom: 8px; left: 8px; padding: 10px; border-color: #b7dce0; box-shadow: 0 16px 34px rgba(15,23,42,.2); }
+        .cart-panel h2 { font-size: 18px; }
+        .cart-panel .cart-list, .cart-panel label, .cart-panel #clearBtn, .cart-panel #newOrderBtn, .cart-panel #posStatus { display: none; }
+        .cart-panel.expanded .cart-list, .cart-panel.expanded label, .cart-panel.expanded #clearBtn, .cart-panel.expanded #newOrderBtn, .cart-panel.expanded #posStatus { display: grid; }
+        .cart-panel.expanded .cart-list { max-height: 180px; }
+        .cart-panel .cart-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .cart-panel .status { padding: 8px 10px; }
+        .cart-panel .status strong { font-size: 20px; }
       }
     </style>
   </head>
@@ -663,8 +659,7 @@ function buildMobileAppHtml(status, pathname) {
 
       <section id="appScreen" class="hidden">
         <div class="tabs">
-          <button id="homeTab">Home</button>
-          <button id="posTab">POS</button>
+          <button id="posTab">POS Sale</button>
           <button id="refreshTab">Refresh</button>
         </div>
 
@@ -700,6 +695,7 @@ function buildMobileAppHtml(status, pathname) {
               <div class="category-strip" id="tableGroupStrip"></div>
               <div class="table-grid" id="tableGrid"></div>
             </div>
+            <input class="menu-search" id="itemSearch" type="search" placeholder="Search menu items" autocomplete="off" />
             <div class="category-strip" id="categoryStrip"></div>
             <div class="item-grid" id="itemGrid"></div>
           </div>
@@ -709,6 +705,7 @@ function buildMobileAppHtml(status, pathname) {
               <h2>Cart</h2>
               <span class="spacer"></span>
               <small id="billLabel">New Bill</small>
+              <button id="cartToggleBtn" type="button">View</button>
             </div>
             <div class="cart-list" id="cartList"></div>
             <div class="status"><span>Total</span><br><strong id="cartTotal">Rs. 0.00</strong></div>
@@ -731,8 +728,9 @@ function buildMobileAppHtml(status, pathname) {
         data: null,
         user: JSON.parse(localStorage.getItem('giMobileUser') || 'null'),
         sessionToken: localStorage.getItem('giMobileSession') || '',
-        activeScreen: initialScreen === 'login' ? 'home' : initialScreen,
+        activeScreen: initialScreen === 'home' ? 'home' : 'pos',
         activeCategory: 'all',
+        itemSearch: '',
         activeTableGroupId: '',
         orderId: '',
         billNo: '',
@@ -808,7 +806,6 @@ function buildMobileAppHtml(status, pathname) {
         byId('logoutBtn').classList.toggle('hidden', !loggedIn);
         byId('homeScreen').classList.toggle('hidden', !loggedIn || state.activeScreen !== 'home');
         byId('posScreen').classList.toggle('hidden', !loggedIn || state.activeScreen !== 'pos');
-        byId('homeTab').classList.toggle('active', state.activeScreen === 'home');
         byId('posTab').classList.toggle('active', state.activeScreen === 'pos');
         byId('activeUserLabel').textContent = state.user ? state.user.name : '';
         if (!loggedIn && initialScreen !== 'login') {
@@ -821,6 +818,7 @@ function buildMobileAppHtml(status, pathname) {
         state.activeTableGroupId = activeGroup.id || state.activeTableGroupId;
         byId('tablePanelTitle').textContent = activeGroup.label || 'Tables';
         byId('selectedTableLabel').textContent = getTableDisplayLabel() || 'No table selected';
+        byId('groupNameInput').closest('label').classList.toggle('hidden', state.seatingMode !== 'group');
         byId('tableGroupStrip').innerHTML = groups.map((group) =>
           '<button class="' + (state.activeTableGroupId === group.id ? 'active' : '') + '" data-table-group="' + escapeText(group.id) + '">' + escapeText(group.label) + '</button>'
         ).join('');
@@ -916,7 +914,11 @@ function buildMobileAppHtml(status, pathname) {
         });
       }
       function renderItems() {
-        const items = (state.data?.menuItems || []).filter((item) => state.activeCategory === 'all' || item.category === state.activeCategory);
+        const query = state.itemSearch.trim().toLowerCase();
+        const items = (state.data?.menuItems || []).filter((item) =>
+          (state.activeCategory === 'all' || item.category === state.activeCategory) &&
+          (!query || item.name.toLowerCase().includes(query) || item.category.toLowerCase().includes(query)),
+        );
         byId('itemGrid').innerHTML = items.map((item) =>
           '<button class="item-card' + (item.available === false ? ' unavailable' : '') + '" data-item="' + escapeText(item.id) + '"' + (item.available === false ? ' disabled' : '') + '><strong>' + escapeText(item.name) + '</strong>' + (item.available === false ? '<span class="soldout">Sold Out</span>' : '') + '<span>' + (Number(item.price || 0) > 0 ? money(item.price) : 'Open price') + '</span></button>'
         ).join('') || '<div class="status">No menu items found. Sync or setup menu on Main PC.</div>';
@@ -936,11 +938,12 @@ function buildMobileAppHtml(status, pathname) {
           price = Number(prompt('Enter item amount', '0') || 0);
           if (price <= 0) return;
         }
-        const line = state.cart.find((entry) => entry.itemId === item.id && entry.price === price);
+        const taxRate = Number(item.taxRate ?? state.data?.businessProfile?.defaultGstRate ?? 0);
+        const line = state.cart.find((entry) => entry.itemId === item.id && entry.price === price && entry.taxRate === taxRate);
         if (line) {
           line.qty += 1;
         } else {
-          state.cart.push({ id: 'line-' + Date.now() + '-' + Math.random().toString(16).slice(2), itemId: item.id, name: item.name, price, qty: 1, taxRate: 0 });
+          state.cart.push({ id: 'line-' + Date.now() + '-' + Math.random().toString(16).slice(2), itemId: item.id, name: item.name, price, qty: 1, taxRate });
         }
         renderCart();
       }
@@ -966,7 +969,9 @@ function buildMobileAppHtml(status, pathname) {
             renderCart();
           });
         });
-        const total = state.cart.reduce((sum, line) => sum + line.price * line.qty, 0);
+        const subtotal = state.cart.reduce((sum, line) => sum + line.price * line.qty, 0);
+        const tax = state.cart.reduce((sum, line) => sum + (line.price * line.qty * Number(line.taxRate || 0)) / 100, 0);
+        const total = state.data?.businessProfile?.gstType === 'inclusive' ? subtotal : subtotal + tax;
         byId('cartTotal').textContent = money(total);
         byId('billLabel').textContent = state.billNo ? 'Bill #' + state.billNo : 'New Bill';
       }
@@ -1069,8 +1074,8 @@ function buildMobileAppHtml(status, pathname) {
           localStorage.setItem('giMobileUser', JSON.stringify(state.user));
           localStorage.setItem('giMobileSession', state.sessionToken);
           byId('pinInput').value = '';
-          state.activeScreen = initialScreen === 'pos' ? 'pos' : 'home';
-          history.replaceState(null, '', state.activeScreen === 'pos' ? '/pos' : '/home');
+          state.activeScreen = initialScreen === 'home' ? 'home' : 'pos';
+          history.replaceState(null, '', state.activeScreen === 'home' ? '/home' : '/pos');
           renderScreen();
         } catch (error) {
           byId('loginStatus').className = 'status error';
@@ -1079,9 +1084,17 @@ function buildMobileAppHtml(status, pathname) {
       }
       byId('loginBtn').addEventListener('click', login);
       byId('pinInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') login(); });
-      byId('homeTab').addEventListener('click', () => { state.activeScreen = 'home'; history.replaceState(null, '', '/home'); renderScreen(); });
       byId('posTab').addEventListener('click', () => { state.activeScreen = 'pos'; history.replaceState(null, '', '/pos'); renderScreen(); });
       byId('refreshTab').addEventListener('click', () => loadData().catch((error) => alert(error.message)));
+      byId('itemSearch').addEventListener('input', (event) => {
+        state.itemSearch = event.target.value || '';
+        renderItems();
+      });
+      byId('cartToggleBtn').addEventListener('click', () => {
+        const panel = byId('cartToggleBtn').closest('.cart-panel');
+        panel.classList.toggle('expanded');
+        byId('cartToggleBtn').textContent = panel.classList.contains('expanded') ? 'Close' : 'View';
+      });
       byId('orderTypeSelect').addEventListener('change', (event) => {
         state.orderType = event.target.value;
         renderTables();
@@ -1375,7 +1388,9 @@ function buildQrOrderHtml(status, tableName) {
         return payload;
       }
       function cartTotal() {
-        return state.cart.reduce((sum, line) => sum + Number(line.price || 0) * Number(line.qty || 0), 0);
+        const subtotal = state.cart.reduce((sum, line) => sum + Number(line.price || 0) * Number(line.qty || 0), 0);
+        const tax = state.cart.reduce((sum, line) => sum + (Number(line.price || 0) * Number(line.qty || 0) * Number(line.taxRate || 0)) / 100, 0);
+        return state.business?.gstType === 'inclusive' ? subtotal : subtotal + tax;
       }
       function renderCategories() {
         const used = new Set(state.items.map((item) => item.category));
@@ -1427,7 +1442,7 @@ function buildQrOrderHtml(status, tableName) {
         if (existing) {
           existing.qty += 1;
         } else {
-          state.cart.push({ id: 'qr-line-' + Date.now() + '-' + item.id, itemId: item.id, name: item.name, price: item.price, qty: 1, taxRate: 0, discountMode: 'percent', discountPercent: 0, discountAmount: 0, description: '' });
+          state.cart.push({ id: 'qr-line-' + Date.now() + '-' + item.id, itemId: item.id, name: item.name, price: item.price, qty: 1, taxRate: Number(item.taxRate ?? state.business?.defaultGstRate ?? 0), discountMode: 'percent', discountPercent: 0, discountAmount: 0, description: '' });
         }
         renderCart();
         setStatus(item.name + ' added', '');
@@ -1674,6 +1689,7 @@ function buildQrBootstrapPayload({ app, getDatabase, getStatus, tableName }) {
       name: item.name,
       category: item.category,
       price: item.price,
+      taxRate: item.taxRate,
       imageDataUrl: item.imageDataUrl,
     }));
   const usedCategoryIds = new Set(menuItems.map((item) => item.category));
@@ -1833,6 +1849,8 @@ function normalizeBusinessProfile(profile, app) {
     email: String(source.email || '').trim(),
     address: String(source.address || '').trim(),
     gstin: String(source.gstin || '').trim(),
+    defaultGstRate: Math.max(0, Number(source.defaultGstRate || 0)),
+    gstType: source.gstType === 'inclusive' ? 'inclusive' : 'exclusive',
   };
 }
 
@@ -1868,6 +1886,10 @@ function normalizeMenuItems(items) {
       imageDataUrl: String(item.imageDataUrl || ''),
       available: item.available === false ? false : true,
       unavailableReason: String(item.unavailableReason || '').trim(),
+      taxRate:
+        Object.prototype.hasOwnProperty.call(item, 'taxRate') && String(item.taxRate ?? '').trim() !== ''
+          ? Math.max(0, Number(item.taxRate || 0))
+          : undefined,
     }))
     .filter((item) => item.id && item.name);
 }
@@ -2074,7 +2096,7 @@ function normalizeCartLines(lines) {
     .filter((line) => line.itemId && line.name && line.qty > 0);
 }
 
-function normalizeMobileCartLines(lines, menuItems) {
+function normalizeMobileCartLines(lines, menuItems, defaultTaxRate = 0) {
   const menuById = new Map(menuItems.map((item) => [item.id, item]));
   return normalizeCartLines(lines)
     .map((line) => {
@@ -2087,6 +2109,7 @@ function normalizeMobileCartLines(lines, menuItems) {
         ...line,
         name: menuItem.name,
         price: menuItem.price > 0 ? menuItem.price : line.price,
+        taxRate: Math.max(0, Number(menuItem.taxRate ?? defaultTaxRate)),
       };
     })
     .filter(Boolean);
@@ -2105,16 +2128,24 @@ function normalizeTotals(totals = {}) {
   };
 }
 
-function buildTotals(cart) {
+function buildTotals(cart, businessProfile = {}) {
   const subtotal = roundMoney(cart.reduce((sum, line) => sum + line.price * line.qty, 0));
+  const tax = roundMoney(
+    cart.reduce((sum, line) => {
+      const gross = Number(line.price || 0) * Number(line.qty || 0);
+      const rate = Math.max(0, Number(line.taxRate || 0));
+      return sum + (businessProfile.gstType === 'inclusive' ? (gross * rate) / (100 + rate) : (gross * rate) / 100);
+    }, 0),
+  );
+  const total = businessProfile.gstType === 'inclusive' ? subtotal : roundMoney(subtotal + tax);
   return {
     subtotal,
     discount: 0,
-    tax: 0,
+    tax,
     serviceCharge: 0,
-    total: subtotal,
+    total,
     paid: 0,
-    balance: subtotal,
+    balance: total,
     change: 0,
   };
 }
@@ -2273,13 +2304,14 @@ function saveMobileOrderToDatabase(getDatabase, user, body, status) {
   const values = getSnapshotValues(getDatabase);
   const orders = normalizeSavedOrders(readStoredJson(values, 'pos-orders', []));
   const menuItems = normalizeMenuItems(readStoredJson(values, 'pos-menu-items', []));
+  const businessProfile = normalizeBusinessProfile(readStoredJson(values, 'pos-business-profile', {}), { getName: () => 'GI POS Restaurant' });
   const orderId = String(body?.orderId || '').trim() || createOrderId();
   const existingOrder = orders.find((order) => order.id === orderId);
   const orderType = normalizeOrderType(body?.orderType);
   const seatingMode = body?.seatingMode === 'group' ? 'group' : 'individual';
   const selectedTables = parseDiningTableNames(body?.tables || body?.table);
   const tableLabel = getSeatingDisplayLabel(seatingMode, body?.table, selectedTables, body?.diningGroupName);
-  const cart = normalizeMobileCartLines(body?.cart || [], menuItems);
+  const cart = normalizeMobileCartLines(body?.cart || [], menuItems, businessProfile.defaultGstRate);
 
   if (!cart.length) {
     throw createHttpError(400, 'Add items before saving order');
@@ -2290,7 +2322,7 @@ function saveMobileOrderToDatabase(getDatabase, user, body, status) {
   }
 
   const now = new Date().toISOString();
-  const totals = buildTotals(cart);
+  const totals = buildTotals(cart, businessProfile);
   const order = {
     id: orderId,
     billNo: existingOrder?.billNo || String(body?.billNo || '').trim() || getNextBillNumber(orders),
@@ -2348,7 +2380,8 @@ function saveQrOrderToDatabase(getDatabase, body) {
   }
 
   const menuItems = normalizeMenuItems(readStoredJson(values, 'pos-menu-items', [])).filter((item) => item.price > 0);
-  const cart = normalizeMobileCartLines(body?.cart || [], menuItems);
+  const businessProfile = normalizeBusinessProfile(readStoredJson(values, 'pos-business-profile', {}), { getName: () => 'GI POS Restaurant' });
+  const cart = normalizeMobileCartLines(body?.cart || [], menuItems, businessProfile.defaultGstRate);
 
   if (!cart.length) {
     throw createHttpError(400, 'Add items before sending order');
@@ -2376,7 +2409,7 @@ function saveQrOrderToDatabase(getDatabase, body) {
     customerPhone: existingPendingOrder?.customerPhone || customerPhone,
     note: mergeQrOrderNotes(existingPendingOrder?.note, note),
     cart: mergedCart,
-    totals: buildTotals(mergedCart),
+    totals: buildTotals(mergedCart, businessProfile),
     createdAt: existingPendingOrder?.createdAt || now,
     updatedAt: now,
   };
@@ -2518,8 +2551,6 @@ function escapeHtml(value) {
 }
 
 function getStoppedStatus() {
-  const primaryIp = getLanAddresses()[0] || '127.0.0.1';
-
   return {
     enabled: false,
     port: preferredPort,
@@ -2532,16 +2563,6 @@ function getStoppedStatus() {
     startedAt: '',
     error: 'LAN server not available',
     dbPath: '',
-    dns: {
-      enabled: false,
-      port: preferredDnsPort,
-      host: '0.0.0.0',
-      domains: localDnsDomains,
-      urls: localDnsDomains.map((domain) => `http://${domain}:${preferredPort}`),
-      primaryIp,
-      upstream: getUpstreamDnsServers()[0] || '',
-      error: 'Local DNS is not running because the LAN server is stopped',
-    },
   };
 }
 
