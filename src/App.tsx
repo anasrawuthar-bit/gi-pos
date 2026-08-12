@@ -73,13 +73,13 @@ type AppView =
   | 'printers'
   | 'printer_config'
   | 'service_staff'
+  | 'customers'
   | 'settings'
   | 'configuration'
   | 'report_configuration'
   | 'keyboard_shortcuts'
 type ReportPeriodMode = 'custom' | 'monthly' | 'yearly'
 type DiscountMode = 'percent' | 'amount'
-type BillNumberResetFrequency = 'daily' | 'monthly' | 'yearly'
 type ShortcutScope = 'global' | 'home' | 'pos'
 type ShortcutActionId =
   | 'global-lock'
@@ -219,6 +219,9 @@ type PaymentBreakdown = {
 type SavedOrder = {
   id: string
   billNo: string
+  kotNo?: string
+  kotPrinted?: boolean
+  kotNote?: string
   status: OrderStatus
   orderType: OrderType
   table: string
@@ -352,7 +355,6 @@ type ReportPrintOptions = {
 type AppConfiguration = {
   showServiceStaffSelector: boolean
   autoLogoutMinutes: number | null
-  billNumberResetFrequency: BillNumberResetFrequency
   enabledPaymentMethods: Record<ConfigurablePaymentMethod, boolean>
   reportPrintOptions: ReportPrintOptions
 }
@@ -666,11 +668,6 @@ const customerFilters: Array<{ id: CustomerFilter; label: string }> = [
   { id: 'due', label: 'Due' },
   { id: 'clear', label: 'No Due' },
 ]
-const customerSortOptions: Array<{ id: CustomerSort; label: string }> = [
-  { id: 'recent', label: 'Recent' },
-  { id: 'name', label: 'Name' },
-  { id: 'due', label: 'Due High' },
-]
 const expenseCategories = [
   'Purchase',
   'Salary',
@@ -841,7 +838,6 @@ const defaultReportPrintOptions: ReportPrintOptions = {
 const defaultAppConfiguration: AppConfiguration = {
   showServiceStaffSelector: true,
   autoLogoutMinutes: 10,
-  billNumberResetFrequency: 'yearly',
   enabledPaymentMethods: {
     UPI: true,
     Card: true,
@@ -968,8 +964,8 @@ const defaultKeyboardShortcuts: KeyboardShortcutDefinition[] = [
     id: 'pos-find-bill',
     scope: 'pos',
     key: 'F',
-    action: 'Find Bill',
-    description: 'Focus bill-number search for today.',
+    action: 'Find Bill / KOT',
+    description: 'Focus Bill or KOT number search for today.',
     permission: 'pos_access',
   },
 ]
@@ -979,6 +975,7 @@ const commonVariantNames = ['Full', 'Half', 'Quarter', 'Single', 'Double', 'Smal
 const initialCart: CartLine[] = []
 
 function App() {
+  const [uiDensity, setUiDensity] = useState<'compact' | 'standard' | 'spacious'>('standard')
   const [categoryList, setCategoryList] = useState<Category[]>(() =>
     normalizeCategories(loadStoredArray('pos-categories', defaultCategories)),
   )
@@ -1025,11 +1022,9 @@ function App() {
   const [currentDate, setCurrentDate] = useState(() => new Date())
   const [activeOrderId, setActiveOrderId] = useState(() => createOrderId())
   const [billNumber, setBillNumber] = useState(() =>
-    getInitialBillNumber(savedOrders, new Date(), appConfiguration.billNumberResetFrequency),
+    getInitialBillNumber(savedOrders),
   )
-  const [billResetPeriodKey, setBillResetPeriodKey] = useState(() =>
-    getBillResetPeriodKey(new Date(), appConfiguration.billNumberResetFrequency),
-  )
+  const [kotNumber, setKotNumber] = useState(() => getInitialKotNumber(savedOrders))
   const [activeCategory, setActiveCategory] = useState('bread')
   const [activeQuickTag, setActiveQuickTag] = useState<ItemTag | null>(null)
   const [search, setSearch] = useState('')
@@ -1043,7 +1038,7 @@ function App() {
   const [customer, setCustomer] = useState('')
   const [customerSearch, setCustomerSearch] = useState('')
   const [customerFilter, setCustomerFilter] = useState<CustomerFilter>('all')
-  const [customerSort, setCustomerSort] = useState<CustomerSort>('recent')
+  const [customerSort] = useState<CustomerSort>('recent')
   const [customerPhone, setCustomerPhone] = useState('')
   const [customerAddress, setCustomerAddress] = useState('')
   const [selectedServiceStaffId, setSelectedServiceStaffId] = useState('')
@@ -1059,6 +1054,8 @@ function App() {
   const [partTenderMethod, setPartTenderMethod] = useState<PartTenderMethod>('upi')
   const [, setPrinterOpen] = useState(false)
   const [kotPrintOpen, setKotPrintOpen] = useState(false)
+  const [kotNoteEditorOpen, setKotNoteEditorOpen] = useState(false)
+  const [kotNote, setKotNote] = useState('')
   const [, setMenuEditorOpen] = useState(false)
   const [displaySettingsOpen, setDisplaySettingsOpen] = useState(false)
   const [tableSelectorOpen, setTableSelectorOpen] = useState(false)
@@ -1073,7 +1070,7 @@ function App() {
   const [tableGroupName, setTableGroupName] = useState('')
   const [tableGroupTables, setTableGroupTables] = useState('')
   const [customerEditorOpen, setCustomerEditorOpen] = useState(false)
-  const [customerDetailEditing, setCustomerDetailEditing] = useState(false)
+  const [customerCreateOpen, setCustomerCreateOpen] = useState(false)
   const [discountEditorOpen, setDiscountEditorOpen] = useState(false)
   const [orderListMode, setOrderListMode] = useState<OrderListMode | null>(null)
   const [orderListDate, setOrderListDate] = useState(() => formatDateInputValue(new Date()))
@@ -1083,6 +1080,7 @@ function App() {
   const [deleteOrdersPin, setDeleteOrdersPin] = useState('')
   const [deleteOrdersError, setDeleteOrdersError] = useState('')
   const [posBillSearch, setPosBillSearch] = useState('')
+  const [pendingOrderSearchResult, setPendingOrderSearchResult] = useState<SavedOrder | null>(null)
   const [reportOpen, setReportOpen] = useState(false)
   const [reportExportMenuOpen, setReportExportMenuOpen] = useState(false)
   const [reportPrintDate, setReportPrintDate] = useState(() => formatDateInputValue(new Date()))
@@ -1359,6 +1357,14 @@ function App() {
     () => savedOrders.filter((order) => order.status === 'unclosed' || order.status === 'hold'),
     [savedOrders],
   )
+  const unclosedOrderCount = useMemo(
+    () => savedOrders.filter((order) => order.status === 'unclosed').length,
+    [savedOrders],
+  )
+  const heldOrderCount = useMemo(
+    () => savedOrders.filter((order) => order.status === 'hold').length,
+    [savedOrders],
+  )
   const pendingQrOrders = useMemo(
     () =>
       qrOrders
@@ -1400,9 +1406,10 @@ function App() {
       orders = savedOrders.filter((order) => order.status === 'hold')
     } else if (orderListMode === 'orders') {
       orders = savedOrders.filter((order) => isSameBusinessDay(order.createdAt, selectedOrderListDay))
-      if (orderListTypeFilter !== 'all') {
-        orders = orders.filter((order) => order.orderType === orderListTypeFilter)
-      }
+    }
+
+    if (orderListTypeFilter !== 'all') {
+      orders = orders.filter((order) => order.orderType === orderListTypeFilter)
     }
 
     return [...orders].sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime())
@@ -1534,21 +1541,31 @@ function App() {
     () => customers.find((profile) => profile.id === selectedCustomerId),
     [customers, selectedCustomerId],
   )
-  const selectedCustomerUnpaidOrders = useMemo(() => {
-    if (!selectedCustomerProfile || selectedCustomerProfile.creditBalance <= 0) {
-      return []
-    }
-
-    return savedOrders
-      .filter(
-        (order) =>
-          order.customerId === selectedCustomerProfile.id &&
-          order.status === 'paid' &&
-          order.creditApplied &&
-          order.totals.balance > 0,
-      )
-      .sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime())
-  }, [savedOrders, selectedCustomerProfile])
+  const selectedCustomerOrders = useMemo(
+    () =>
+      selectedCustomerProfile
+        ? savedOrders
+            .filter((order) => order.customerId === selectedCustomerProfile.id)
+            .sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime())
+        : [],
+    [savedOrders, selectedCustomerProfile],
+  )
+  const selectedCustomerOrderSummary = useMemo(
+    () => ({
+      count: selectedCustomerOrders.length,
+      paid: roundMoney(selectedCustomerOrders.filter((order) => order.status === 'paid').reduce((sum, order) => sum + order.totals.total, 0)),
+      pending: roundMoney(selectedCustomerOrders.filter((order) => order.status !== 'paid').reduce((sum, order) => sum + order.totals.total, 0)),
+    }),
+    [selectedCustomerOrders],
+  )
+  const selectedCustomerTodayOrders = useMemo(() => {
+    const today = formatDateInputValue(currentDate)
+    return selectedCustomerOrders.filter((order) => formatDateInputValue(new Date(order.createdAt)) === today)
+  }, [currentDate, selectedCustomerOrders])
+  const selectedCustomerTodayTotal = useMemo(
+    () => roundMoney(selectedCustomerTodayOrders.reduce((sum, order) => sum + Number(order.totals.total || 0), 0)),
+    [selectedCustomerTodayOrders],
+  )
   const selectedTableSetupGroup = useMemo(
     () => (editingTableGroupId ? (diningTableGroups.find((group) => group.id === editingTableGroupId) ?? null) : null),
     [diningTableGroups, editingTableGroupId],
@@ -1924,8 +1941,8 @@ function App() {
         setPrinterProfiles(loadedPrinterProfiles)
         setBillPrinterProfileId(loadedBillPrinterProfileId)
         setActivePrinterProfileId(loadedActivePrinterProfileId)
-        setBillNumber(getInitialBillNumber(loadedOrders, new Date(), loadedAppConfiguration.billNumberResetFrequency))
-        setBillResetPeriodKey(getBillResetPeriodKey(new Date(), loadedAppConfiguration.billNumberResetFrequency))
+        setBillNumber(getInitialBillNumber(loadedOrders))
+        setKotNumber(getInitialKotNumber(loadedOrders))
         setTheme(loadedTheme === 'dark' ? 'dark' : 'light')
         setKeyboardShortcutsEnabled(loadedKeyboardShortcutsEnabled)
         setLocalDatabasePath(snapshot.path)
@@ -2149,16 +2166,22 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const currentResetPeriodKey = getBillResetPeriodKey(currentDate, appConfiguration.billNumberResetFrequency)
-    if (currentResetPeriodKey === billResetPeriodKey) {
-      return
+    const updateUiDensity = () => {
+      const width = window.innerWidth
+      const height = window.innerHeight
+      if (width < 1180 || height < 720) {
+        setUiDensity('compact')
+      } else if (width >= 1800 && height >= 980) {
+        setUiDensity('spacious')
+      } else {
+        setUiDensity('standard')
+      }
     }
 
-    setBillResetPeriodKey(currentResetPeriodKey)
-    if (!cart.length) {
-      setBillNumber(getInitialBillNumber(savedOrders, currentDate, appConfiguration.billNumberResetFrequency))
-    }
-  }, [appConfiguration.billNumberResetFrequency, billResetPeriodKey, cart.length, currentDate, savedOrders])
+    updateUiDensity()
+    window.addEventListener('resize', updateUiDensity)
+    return () => window.removeEventListener('resize', updateUiDensity)
+  }, [])
 
   useEffect(() => {
     if (!window.posUpdater) {
@@ -2486,6 +2509,7 @@ function App() {
     if (view === 'sync') return 'cloud_sync'
     if (view === 'users') return 'user_manage'
     if (view === 'service_staff') return 'user_manage'
+    if (view === 'customers') return 'pos_access'
     if (view === 'menu') return 'menu_manage'
     if (view === 'printers') return 'printer_manage'
     if (view === 'printer_config') return 'printer_manage'
@@ -2518,6 +2542,7 @@ function App() {
     if (view === 'sync') return hasCloudFeatureAccess && hasPermission('cloud_sync')
     if (view === 'users') return hasPermission('user_manage')
     if (view === 'service_staff') return hasPermission('user_manage')
+    if (view === 'customers') return hasPermission('pos_access')
     if (view === 'menu') return hasPermission('menu_manage')
     if (view === 'printers') return hasPermission('printer_manage')
     if (view === 'printer_config') return hasPermission('printer_manage')
@@ -3095,7 +3120,7 @@ function App() {
     setStaffEditorActive(user.active)
     setStaffEditorStatus(
       isOwnerStaffUser(user)
-        ? 'Owner user is protected. Permissions and status are read-only; enter a new PIN only if you want to change it.'
+        ? 'Owner permissions and status are protected. You can update the display name and PIN.'
         : 'Leave PIN empty to keep current PIN',
     )
   }
@@ -3152,15 +3177,11 @@ function App() {
     const pin = staffPin ? await hashPin(staffPin) : null
 
     if (existing && isOwnerStaffUser(existing)) {
-      if (!pin) {
-        setStaffEditorStatus('Owner user is read-only. Enter a new PIN to change PIN.')
-        return
-      }
-
       const updatedOwner = {
         ...existing,
-        pinSalt: pin.salt,
-        pinHash: pin.hash,
+        name,
+        pinSalt: pin?.salt ?? existing.pinSalt,
+        pinHash: pin?.hash ?? existing.pinHash,
         updatedAt: now,
       }
       setStaffUsers((users) =>
@@ -3168,8 +3189,8 @@ function App() {
       )
       setStaffPin('')
       setStaffPinConfirm('')
-      setStaffEditorStatus('Owner PIN changed successfully')
-      recordAudit('owner_pin_changed', `${existing.name} PIN changed from User Manage`)
+      setStaffEditorStatus('Owner details saved')
+      recordAudit(pin ? 'owner_pin_changed' : 'owner_updated', `${name} owner details saved from User Manage`)
       return
     }
 
@@ -3518,6 +3539,7 @@ function App() {
   function closeBlockingPanelsForAuth() {
     setPrinterOpen(false)
     setKotPrintOpen(false)
+    setKotNoteEditorOpen(false)
     setMenuEditorOpen(false)
     setDisplaySettingsOpen(false)
     setTableSelectorOpen(false)
@@ -4069,8 +4091,8 @@ function App() {
               ? (change.value as SavedOrder[]).map(normalizeSavedOrderPayment)
               : []
             setSavedOrders(restoredOrders)
-            setBillNumber(getInitialBillNumber(restoredOrders, new Date(), appConfiguration.billNumberResetFrequency))
-            setBillResetPeriodKey(getBillResetPeriodKey(new Date(), appConfiguration.billNumberResetFrequency))
+            setBillNumber(getInitialBillNumber(restoredOrders))
+            setKotNumber(getInitialKotNumber(restoredOrders))
           }
           break
         case openingCashStorageKey:
@@ -4374,7 +4396,7 @@ function App() {
         }
       : {
           id: createOrderId(),
-          billNo: String(getInitialBillNumber(sourceOrders, new Date(), appConfiguration.billNumberResetFrequency)),
+          billNo: String(getInitialBillNumber(sourceOrders)),
           status: 'unclosed' as OrderStatus,
           orderType: 'Dining' as OrderType,
           table: currentQrOrder.table,
@@ -4751,6 +4773,7 @@ function App() {
 
   function startBlankOrder(advanceBill = true) {
     setCart([])
+    setKotNote('')
     setDiscountMode('percent')
     setDiscountPercent(0)
     setDiscountAmount(0)
@@ -4771,15 +4794,8 @@ function App() {
     setOrderType('Dining')
     setActiveOrderId(createOrderId())
     if (advanceBill) {
-      const currentResetPeriodKey = getBillResetPeriodKey(new Date(), appConfiguration.billNumberResetFrequency)
-      setBillResetPeriodKey(currentResetPeriodKey)
       setBillNumber((value) =>
-        getNextBillNumber(
-          savedOrdersRef.current,
-          billResetPeriodKey === currentResetPeriodKey ? value : firstBillNumber - 1,
-          new Date(),
-          appConfiguration.billNumberResetFrequency,
-        ),
+        getNextBillNumber(savedOrdersRef.current, value),
       )
     }
   }
@@ -4797,6 +4813,8 @@ function App() {
     return {
       id: activeOrderId,
       billNo: String(billNumber),
+      kotNo: existingOrder?.kotNo,
+      kotNote: normalizeLineDescription(kotNote),
       status,
       orderType,
       table: savedTableLabel,
@@ -4848,11 +4866,13 @@ function App() {
   }
 
   function saveCurrentOrder(status: OrderStatus, creditCustomer?: CustomerProfile) {
-    const order = buildCurrentOrderSnapshot(status, creditCustomer)
+    const draftOrder = buildCurrentOrderSnapshot(status, creditCustomer)
+    const order = draftOrder.kotNo ? draftOrder : { ...draftOrder, kotNo: String(getInitialKotNumber(savedOrdersRef.current)) }
     const nextOrders = upsertSavedOrder(order)
 
     savedOrdersRef.current = nextOrders
     setSavedOrders(nextOrders)
+    setKotNumber(getInitialKotNumber(nextOrders))
     void persistSavedOrdersNow(nextOrders).catch((error) => {
       setPrinterStatus(`Order save failed: ${getErrorMessage(error)}`)
     })
@@ -4861,12 +4881,14 @@ function App() {
   }
 
   async function saveCurrentOrderDurable(status: OrderStatus, creditCustomer?: CustomerProfile) {
-    const order = buildCurrentOrderSnapshot(status, creditCustomer)
+    const draftOrder = buildCurrentOrderSnapshot(status, creditCustomer)
+    const order = draftOrder.kotNo ? draftOrder : { ...draftOrder, kotNo: String(getInitialKotNumber(savedOrdersRef.current)) }
     const nextOrders = upsertSavedOrder(order)
 
     savedOrdersRef.current = nextOrders
     setSavedOrders(nextOrders)
     await persistSavedOrdersNow(nextOrders)
+    setKotNumber(getInitialKotNumber(nextOrders))
 
     return order
   }
@@ -4945,6 +4967,7 @@ function App() {
     setCustomerPhone(savedCustomer?.phone ?? '')
     setCustomerAddress(savedCustomer?.address ?? '')
     setCart(order.cart)
+    setKotNote(order.kotNote ?? '')
     setDiscountMode(order.discountMode ?? 'percent')
     setDiscountPercent(order.discountPercent)
     setDiscountAmount(order.discountAmount ?? 0)
@@ -5231,7 +5254,6 @@ function App() {
     setCustomer(profile.name)
     setCustomerPhone(profile.phone)
     setCustomerAddress(profile.address)
-    setCustomerDetailEditing(false)
     setPrinterStatus(`${profile.name} customer profile saved`)
 
     return profile
@@ -5242,7 +5264,6 @@ function App() {
     setCustomer(profile.name)
     setCustomerPhone(profile.phone)
     setCustomerAddress(profile.address)
-    setCustomerDetailEditing(false)
   }
 
   function editCustomerProfile(profile: CustomerProfile) {
@@ -5250,7 +5271,6 @@ function App() {
     setCustomer(profile.name)
     setCustomerPhone(profile.phone)
     setCustomerAddress(profile.address)
-    setCustomerDetailEditing(true)
   }
 
   function clearCustomerProfile() {
@@ -5258,30 +5278,6 @@ function App() {
     setCustomer('')
     setCustomerPhone('')
     setCustomerAddress('')
-    setCustomerDetailEditing(true)
-  }
-
-  function markSelectedCustomerDuePaid() {
-    if (!requirePermission('due_manage', 'Due management permission required')) {
-      return
-    }
-
-    if (!selectedCustomerProfile || selectedCustomerProfile.creditBalance <= 0) {
-      return
-    }
-
-    const nextCustomers = customersRef.current.map((profile) =>
-      profile.id === selectedCustomerProfile.id
-        ? { ...profile, creditBalance: 0, updatedAt: new Date().toISOString() }
-        : profile,
-    )
-    customersRef.current = nextCustomers
-    setCustomers(nextCustomers)
-    void persistLocalValueNow('pos-customers', nextCustomers).catch((error) => {
-      setPrinterStatus(`Customer due save failed: ${getErrorMessage(error)}`)
-    })
-    setPrinterStatus(`${selectedCustomerProfile.name} due marked as paid`)
-    recordAudit('due_marked_paid', `${selectedCustomerProfile.name} due marked as paid`)
   }
 
   function applyCustomerCredit(order: SavedOrder) {
@@ -5991,18 +5987,19 @@ function App() {
       return
     }
 
-    if (activeSavedOrder?.status !== 'paid') {
-      saveCurrentOrder('unclosed')
-    }
+    const kotOrder = await ensureKotNumber()
+    if (!kotOrder) return
 
     setPrinterStatus(`Printing ${profile.name} KOT...`)
     try {
       await window.posPrinter.printKot({
         settings: profile.settings,
-        kot: buildKotOrder(profile.name, kotItems),
+        kot: buildKotOrder(profile.name, kotItems, kotOrder.kotNo),
       })
+      await markKotPrinted(kotOrder.id)
       setKotPrintOpen(false)
-      setPrinterStatus(`${profile.name} KOT sent`)
+      startBlankOrder(true)
+      setPrinterStatus(`${profile.name} KOT sent. New bill ready`)
     } catch (error) {
       setPrinterStatus(getErrorMessage(error))
     }
@@ -6027,9 +6024,8 @@ function App() {
       return
     }
 
-    if (activeSavedOrder?.status !== 'paid') {
-      saveCurrentOrder('unclosed')
-    }
+    const kotOrder = await ensureKotNumber()
+    if (!kotOrder) return
 
     const routeGroups = buildKotRouteGroups(cart)
     if (!routeGroups.length) {
@@ -6042,15 +6038,49 @@ function App() {
       for (const routeGroup of routeGroups) {
         await window.posPrinter.printKot({
           settings: routeGroup.profile.settings,
-          kot: buildKotOrder(routeGroup.profile.name, routeGroup.lines),
+        kot: buildKotOrder(routeGroup.profile.name, routeGroup.lines, kotOrder.kotNo),
         })
       }
+      await markKotPrinted(kotOrder.id)
       setKotPrintOpen(false)
       const itemCount = routeGroups.reduce((total, routeGroup) => total + routeGroup.lines.length, 0)
-      setPrinterStatus(`KOT sent: ${itemCount} item(s) routed to ${routeGroups.length} printer(s)`)
+      startBlankOrder(true)
+      setPrinterStatus(`KOT sent: ${itemCount} item(s) routed to ${routeGroups.length} printer(s). New bill ready`)
     } catch (error) {
       setPrinterStatus(getErrorMessage(error))
     }
+  }
+
+  async function ensureKotNumber() {
+    const existingOrder = savedOrdersRef.current.find((order) => order.id === activeOrderId)
+    if (existingOrder?.kotNo) {
+      return existingOrder
+    }
+
+    try {
+      const order = existingOrder
+        ? { ...existingOrder, kotNo: String(getInitialKotNumber(savedOrdersRef.current)), updatedAt: new Date().toISOString() }
+        : { ...buildCurrentOrderSnapshot('unclosed'), kotNo: String(getInitialKotNumber(savedOrdersRef.current)) }
+      const nextOrders = upsertSavedOrder(order)
+      savedOrdersRef.current = nextOrders
+      setSavedOrders(nextOrders)
+      await persistSavedOrdersNow(nextOrders)
+      setKotNumber(getInitialKotNumber(nextOrders))
+      return order
+    } catch (error) {
+      setPrinterStatus(`KOT could not be saved: ${getErrorMessage(error)}`)
+      return null
+    }
+  }
+
+  async function markKotPrinted(orderId: string) {
+    const savedOrder = savedOrdersRef.current.find((order) => order.id === orderId)
+    if (!savedOrder || savedOrder.kotPrinted) return
+
+    const nextOrders = upsertSavedOrder({ ...savedOrder, kotPrinted: true, updatedAt: new Date().toISOString() })
+    savedOrdersRef.current = nextOrders
+    setSavedOrders(nextOrders)
+    await persistSavedOrdersNow(nextOrders)
   }
 
   async function testPrinter(profileId = activePrinterDraft?.id) {
@@ -6157,6 +6187,7 @@ function App() {
   function buildReceiptOrder() {
     return {
       billNo: String(billNumber),
+      kotNo: activeSavedOrder?.kotNo ?? String(kotNumber),
       business: {
         name: receiptBusinessName,
         owner: billingOwnerName,
@@ -6202,9 +6233,10 @@ function App() {
     }
   }
 
-  function buildKotOrder(station: string, kotItems = cart) {
+  function buildKotOrder(station: string, kotItems = cart, savedKotNo?: string) {
     return {
       billNo: String(billNumber),
+      kotNo: savedKotNo ?? activeSavedOrder?.kotNo ?? String(kotNumber),
       station,
       orderType,
       table: getSeatingDisplayLabel(seatingMode, table, selectedTables, diningGroupName),
@@ -6212,6 +6244,7 @@ function App() {
       cashier: receiptCashierName,
       serviceStaffName: appConfiguration.showServiceStaffSelector ? selectedServiceStaffName : '',
       serviceStaffCode: appConfiguration.showServiceStaffSelector ? selectedServiceStaffCode : '',
+      note: normalizeLineDescription(kotNote),
       items: kotItems.map((line) => ({
         name: line.name,
         qty: line.qty,
@@ -6381,30 +6414,60 @@ function App() {
   function openOrderList(mode: OrderListMode) {
     if (mode === 'orders') {
       setOrderListDate(formatDateInputValue(new Date()))
-      setOrderListTypeFilter('all')
     }
 
+    setOrderListTypeFilter('all')
     setOrderListMode(mode)
   }
 
   function openBillFromPosSearch() {
-    const billSearch = posBillSearch.trim()
-    if (!billSearch) {
-      setPrinterStatus('Enter a bill number to open it')
+    const kotSearch = posBillSearch.trim()
+    if (!kotSearch) {
+      setPrinterStatus('Enter a Bill or KOT number to open it')
       return
     }
 
     const matchedOrder = savedOrders
-      .filter((order) => isSameBusinessDay(order.createdAt || order.updatedAt, currentDate) && String(order.billNo) === billSearch)
+      .filter(
+        (order) =>
+          isSameBusinessDay(order.createdAt || order.updatedAt, currentDate) &&
+          (String(order.kotNo ?? '') === kotSearch || String(order.billNo) === kotSearch),
+      )
       .sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime())[0]
 
     if (matchedOrder) {
-      loadOrder(matchedOrder)
       setPosBillSearch('')
+      if (matchedOrder.id !== activeOrderId && cart.length > 0) {
+        setPendingOrderSearchResult(matchedOrder)
+        return
+      }
+      loadOrder(matchedOrder)
       return
     }
 
-    setPrinterStatus(`Bill #${billSearch} was not found for today`)
+    setPrinterStatus(`Bill or KOT #${kotSearch} was not found for today`)
+  }
+
+  async function saveAndOpenSearchOrder() {
+    const nextOrder = pendingOrderSearchResult
+    if (!nextOrder) return
+
+    try {
+      await saveCurrentOrderDurable('unclosed')
+      setPendingOrderSearchResult(null)
+      loadOrder(nextOrder)
+      setPrinterStatus(`Current order saved. Opened Bill ${nextOrder.billNo}`)
+    } catch (error) {
+      setPrinterStatus(`Current order was not saved: ${getErrorMessage(error)}`)
+    }
+  }
+
+  function discardAndOpenSearchOrder() {
+    const nextOrder = pendingOrderSearchResult
+    if (!nextOrder) return
+    setPendingOrderSearchResult(null)
+    loadOrder(nextOrder)
+    setPrinterStatus(`Opened Bill ${nextOrder.billNo}`)
   }
 
   if (!storageReady) {
@@ -6738,7 +6801,7 @@ function App() {
   }
 
   return (
-    <main className={activeView === 'pos' ? 'pos-shell pos-active-shell' : 'pos-shell'} data-theme={theme}>
+    <main className={activeView === 'pos' ? 'pos-shell pos-active-shell' : 'pos-shell'} data-theme={theme} data-density={uiDensity}>
       <header className={activeView === 'pos' ? 'topbar pos-topbar' : 'topbar'}>
         <button className="brand-block app-brand-button" type="button" onClick={() => goToView('home')}>
           <div className="brand-mark">
@@ -6759,7 +6822,30 @@ function App() {
         </div>
 
         {activeView === 'pos' ? (
-          <div className="pos-header-actions" aria-label="POS controls">
+          <>
+            <div className="header-bill-search" title="Open today's saved Bill or KOT">
+              <Search size={15} />
+              <input
+                ref={posBillSearchInputRef}
+                type="number"
+                min="1"
+                inputMode="numeric"
+                aria-label="Find today's Bill or KOT number"
+                placeholder="Bill / KOT #"
+                value={posBillSearch}
+                onChange={(event) => setPosBillSearch(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    openBillFromPosSearch()
+                  }
+                }}
+              />
+              <button type="button" onClick={openBillFromPosSearch} aria-label="Open Bill or KOT" title="Open Bill or KOT">
+                Open
+              </button>
+            </div>
+            <div className="pos-header-actions" aria-label="POS controls">
             <div className="pos-top-summary" aria-label="POS status">
               <span>{billingDisplayName}</span>
             </div>
@@ -6778,6 +6864,7 @@ function App() {
             <button className="tool-button" type="button" title="Unclosed orders" onClick={() => openOrderList('unclosed')}>
               <Bell size={16} />
               Unclosed
+              {unclosedOrderCount > 0 && <span className="order-alert-count">{unclosedOrderCount}</span>}
             </button>
             <button className="tool-button" type="button" title="Orders" onClick={() => openOrderList('orders')}>
               <ReceiptText size={16} />
@@ -6799,13 +6886,15 @@ function App() {
             <button className="tool-button" type="button" title="Hold orders" onClick={() => openOrderList('hold')}>
               <Clock3 size={16} />
               Hold
+              {heldOrderCount > 0 && <span className="order-alert-count">{heldOrderCount}</span>}
             </button>
             <button className="new-order" type="button" onClick={newOrder}>
               <Plus size={17} />
               New Order
               {renderShortcutKey('pos-new-order')}
             </button>
-          </div>
+            </div>
+          </>
         ) : (
           <div className="top-controls app-nav-controls">
             <nav className="view-tabs" aria-label="App views">
@@ -6939,6 +7028,13 @@ function App() {
               <strong>Settings</strong>
               <span>App configuration</span>
               {renderShortcutKey('home-settings')}
+            </button>
+            )}
+            {hasSubscriptionAccess && hasPermission('pos_access') && (
+            <button className="home-launch-tile" type="button" onClick={() => goToView('customers')}>
+              <User size={34} />
+              <strong>Customer ID</strong>
+              <span>Profiles and bill history</span>
             </button>
             )}
             {hasSubscriptionAccess && hasCloudFeatureAccess && hasPermission('cloud_sync') && hasGoldLocalPlan && (
@@ -7100,24 +7196,6 @@ function App() {
                   <option value="30">After 30 minutes</option>
                   <option value="60">After 1 hour</option>
                   <option value="never">Never</option>
-                </select>
-              </label>
-              <label className="configuration-option configuration-select-option">
-                <div>
-                  <strong>Bill number reset</strong>
-                  <span>Choose when the bill sequence starts again from 1. Existing bills keep their original number and date.</span>
-                </div>
-                <select
-                  value={appConfiguration.billNumberResetFrequency}
-                  onChange={(event) => {
-                    const frequency = event.currentTarget.value as BillNumberResetFrequency
-                    updateAppConfiguration((settings) => ({ ...settings, billNumberResetFrequency: frequency }))
-                    setPrinterStatus(`Bill number reset set to ${frequency}`)
-                  }}
-                >
-                  <option value="daily">Daily</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="yearly">Yearly</option>
                 </select>
               </label>
             </section>
@@ -7913,6 +7991,68 @@ function App() {
         </section>
       )}
 
+      {activeView === 'customers' && (
+        <section className="customer-directory-view page-view">
+          <div className="page-head">
+            <div>
+              <span>Customers</span>
+              <h1>Customer Directory</h1>
+              <p>Search customer profiles, credit, and bill history</p>
+            </div>
+            <button className="home-action" type="button" onClick={() => goToView('home')}>
+              <Home size={18} />
+              Home
+            </button>
+          </div>
+
+          <div className="customer-stat-grid customer-directory-stats">
+            <div><span>Total Customers</span><strong>{customerStats.total}</strong></div>
+            <div><span>Due Customers</span><strong>{customerStats.dueCount}</strong></div>
+            <div><span>Total Due</span><strong>{money(customerStats.dueTotal)}</strong></div>
+          </div>
+
+          <div className="customer-directory-layout">
+            <section className="home-card customer-directory-list">
+              <div className="customer-search-box">
+                <Search size={17} />
+                <input placeholder="Search name or phone" value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} />
+              </div>
+              <div className="customer-tools">
+                <div className="customer-filter-tabs">
+                  {customerFilters.map((filter) => <button className={customerFilter === filter.id ? 'active' : ''} key={filter.id} type="button" onClick={() => setCustomerFilter(filter.id)}>{filter.label}</button>)}
+                </div>
+                <button className="small-button" type="button" onClick={clearCustomerProfile}><Plus size={16} /> New</button>
+              </div>
+              <div className="customer-picker-list">
+                {filteredCustomers.map((profile) => (
+                  <button className={selectedCustomerId === profile.id ? 'customer-directory-row active' : 'customer-directory-row'} key={profile.id} type="button" onClick={() => selectCustomerProfile(profile)}>
+                    <span><strong>{profile.name}</strong><small>{profile.phone || 'No phone'}</small></span>
+                    <strong className={profile.creditBalance > 0 ? 'due-amount' : ''}>{profile.creditBalance > 0 ? money(profile.creditBalance) : 'Clear'}</strong>
+                  </button>
+                ))}
+                {!filteredCustomers.length && <div className="empty-customer-list">No matching customer</div>}
+              </div>
+            </section>
+
+            <section className="home-card customer-directory-detail">
+              {selectedCustomerProfile ? (
+                <>
+                  <div className="customer-readonly-head"><div><span>Customer Profile</span><strong>{selectedCustomerProfile.name}</strong></div><button className="small-button icon-only" type="button" onClick={() => { editCustomerProfile(selectedCustomerProfile); setCustomerEditorOpen(true) }} title="Edit customer"><Pencil size={16} /></button></div>
+                  <div className="customer-summary-card"><div><span>Phone</span><strong>{selectedCustomerProfile.phone || 'Not set'}</strong></div><div><span>Address</span><strong>{selectedCustomerProfile.address || 'Not set'}</strong></div><div><span>Balance Due</span><strong>{money(selectedCustomerProfile.creditBalance)}</strong></div></div>
+                  <div className="customer-directory-metrics"><div><span>Orders</span><strong>{selectedCustomerOrderSummary.count}</strong></div><div><span>Paid</span><strong>{money(selectedCustomerOrderSummary.paid)}</strong></div><div><span>Pending</span><strong>{money(selectedCustomerOrderSummary.pending)}</strong></div></div>
+                  <div className="customer-list-head"><strong>Today's Bills</strong><span>{selectedCustomerTodayOrders.length} bill(s) / {formatDate(currentDate)}</span></div>
+                  <div className="customer-directory-orders">
+                    {selectedCustomerTodayOrders.map((order) => <button type="button" key={order.id} onClick={() => { loadOrder(order); goToView('pos') }}><span>Bill #{order.billNo} / {formatDate(new Date(order.createdAt))}</span><strong>{order.status === 'paid' ? 'Paid' : order.status === 'hold' ? 'Hold' : 'Unclosed'} / {money(order.totals.total)}</strong></button>)}
+                    {!selectedCustomerTodayOrders.length && <div className="empty-customer-list">No bills saved for this customer today</div>}
+                  </div>
+                  <div className="customer-directory-total"><span>Today's Bill Total</span><strong>{money(selectedCustomerTodayTotal)}</strong></div>
+                </>
+              ) : <div className="empty-customer-list">Select a customer to view their details and bills</div>}
+            </section>
+          </div>
+        </section>
+      )}
+
       {activeView === 'profile' && (
         <section className="profile-view page-view">
           {renderSettingsContextBack('Business Profile')}
@@ -8119,11 +8259,11 @@ function App() {
             <section className="home-card user-editor-card">
               <div className="section-title">
                 <strong>{staffEditorId ? 'Edit User' : 'New User'}</strong>
-                <span>{isOwnerStaffEditor ? 'PIN change only' : 'Secure PIN'}</span>
+                <span>{isOwnerStaffEditor ? 'Owner details' : 'Secure PIN'}</span>
               </div>
               {isOwnerStaffEditor && (
                 <div className="sync-message">
-                  Owner permissions and status are read-only. Enter a new PIN only when you need to change it.
+                  Owner permissions and status are read-only. You can update the display name and PIN here.
                 </div>
               )}
               <div className="profile-form user-form">
@@ -8131,7 +8271,6 @@ function App() {
                   Name
                   <input
                     value={staffName}
-                    disabled={isOwnerStaffEditor}
                     onChange={(event) => setStaffName(event.target.value)}
                   />
                 </label>
@@ -8194,7 +8333,7 @@ function App() {
                 </button>
                 <button className="small-button primary" type="button" onClick={() => void saveStaffUser()}>
                   <Save size={16} />
-                  {isOwnerStaffEditor ? 'Save PIN' : 'Save User'}
+                  Save
                 </button>
               </div>
             </section>
@@ -9059,32 +9198,17 @@ function App() {
           </div>
 
             <div className="bill-head">
-              <div className="bill-number-head">
-                <span>Bill#</span>
-                <strong>{billNumber}</strong>
+              <div className="bill-reference-group">
+                <div className="bill-number-head">
+                  <span>Bill #</span>
+                  <strong>{billNumber}</strong>
+                </div>
+                <div className="bill-number-head kot-number-head">
+                  <span>KOT #</span>
+                  <strong>{activeSavedOrder?.kotNo ?? kotNumber}</strong>
+                </div>
               </div>
-              <div className="pos-bill-search" title="Open a bill from today">
-                <Search size={16} />
-                <input
-                  ref={posBillSearchInputRef}
-                  type="number"
-                  min="1"
-                  inputMode="numeric"
-                  aria-label="Find today's bill number"
-                  placeholder="Find bill #"
-                  value={posBillSearch}
-                  onChange={(event) => setPosBillSearch(event.currentTarget.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault()
-                      openBillFromPosSearch()
-                    }
-                  }}
-                />
-                <button type="button" onClick={openBillFromPosSearch} aria-label="Open bill" title="Open bill">
-                  Open
-                </button>
-              </div>
+              <div className="bill-head-actions">
               <button
               type="button"
               className="icon-action"
@@ -9103,7 +9227,7 @@ function App() {
               </span>
             </button>
             {isDueCreditEnabled && (
-              <button type="button" className="icon-action" title="Customer" onClick={() => setCustomerEditorOpen(true)}>
+              <button type="button" className="icon-action" title="Customer" onClick={() => { setCustomerCreateOpen(false); setCustomerEditorOpen(true) }}>
                 <User size={19} />
                 <span>{customer || 'Customer'}</span>
               </button>
@@ -9121,11 +9245,23 @@ function App() {
               <BadgePercent size={19} />
               <span>{getDiscountLabel(baseTotals.subtotal, discountMode, discountPercent, discountAmount)}</span>
             </button>
+              </div>
           </div>
 
           <div className="cart-title">
             <span>Cart</span>
-            <strong>{itemCount} item(s)</strong>
+            <div className="cart-title-actions">
+              <button
+                className={kotNote ? 'cart-note-button active' : 'cart-note-button'}
+                type="button"
+                onClick={() => setKotNoteEditorOpen(true)}
+                title="Add KOT note"
+              >
+                <ReceiptText size={15} />
+                KOT Note
+              </button>
+              <strong>{itemCount} item(s)</strong>
+            </div>
           </div>
 
           <div className="cart-list">
@@ -9291,7 +9427,7 @@ function App() {
               )}
 
               {cart.length > 0 &&
-                (totals.discount > 0 || taxExempt || totals.tax > 0 || totals.serviceCharge > 0 || businessProfile.defaultGstRate > 0) && (
+                (totals.discount > 0 || totals.tax > 0 || totals.serviceCharge > 0) && (
                 <div className="bill-adjustment-summary">
                   {totals.discount > 0 && (
                     <div className="bill-adjustment-row discount">
@@ -9299,12 +9435,7 @@ function App() {
                       <strong>-{money(totals.discount)}</strong>
                     </div>
                   )}
-                  {taxExempt ? (
-                    <div className="bill-adjustment-row success">
-                      <span>Tax</span>
-                      <strong>Exempt</strong>
-                    </div>
-                  ) : totals.tax > 0 && (
+                  {totals.tax > 0 && (
                     <>
                       <div className="bill-adjustment-row">
                         <span>CGST</span>
@@ -9322,22 +9453,10 @@ function App() {
                       <strong>{money(totals.serviceCharge)}</strong>
                     </div>
                   )}
-                  {businessProfile.defaultGstRate > 0 && (
-                    <div className="bill-tax-toggle-row">
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={taxExempt}
-                          onChange={(e) => setTaxExempt(e.currentTarget.checked)}
-                        />
-                        Tax Exempt
-                      </label>
-                    </div>
-                  )}
                 </div>
               )}
 
-              <div className="grand-total">
+              <div className="grand-total payment-total-slot">
                 <span>Total</span>
                 <strong>{money(totals.total)}</strong>
               </div>
@@ -9945,250 +10064,47 @@ function App() {
 
       {customerEditorOpen && (
         <div className="modal-layer" role="dialog" aria-modal="true" aria-label="Customer">
-          <div className="quick-panel customer-panel">
+          <div className="quick-panel pos-customer-picker-panel">
             <div className="panel-head">
               <div>
-                <strong>Customer Profile</strong>
-                <span>{customerStats.total} customers / {customerStats.dueCount} due</span>
+                <strong>Select Customer</strong>
+                <span>Search an existing customer or save a new one</span>
               </div>
-              <button type="button" onClick={() => setCustomerEditorOpen(false)} title="Close">
+              <button type="button" onClick={() => { setCustomerCreateOpen(false); setCustomerEditorOpen(false) }} title="Close">
                 <X size={18} />
               </button>
             </div>
-
-            <div className="customer-stat-grid">
-              <div>
-                <span>Total Customers</span>
-                <strong>{customerStats.total}</strong>
-              </div>
-              <div>
-                <span>Due Customers</span>
-                <strong>{customerStats.dueCount}</strong>
-              </div>
-              <div>
-                <span>Total Due</span>
-                <strong>{money(customerStats.dueTotal)}</strong>
-              </div>
+            <div className="customer-search-box">
+              <Search size={17} />
+              <input autoFocus placeholder="Search name or phone" value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} />
             </div>
-
-            <div className="customer-workspace">
-              <section className="customer-search-panel">
-                <div className="customer-search-box">
-                  <Search size={17} />
-                  <input
-                    autoFocus
-                    placeholder="Search customer name / phone"
-                    value={customerSearch}
-                    onChange={(event) => setCustomerSearch(event.target.value)}
-                  />
-                </div>
-
-                <div className="customer-tools">
-                  <div className="customer-filter-tabs">
-                    {customerFilters.map((filter) => (
-                      <button
-                        className={customerFilter === filter.id ? 'active' : ''}
-                        key={filter.id}
-                        type="button"
-                        onClick={() => setCustomerFilter(filter.id)}
-                      >
-                        {filter.label}
-                      </button>
-                    ))}
-                  </div>
-                  <label className="customer-sort-field">
-                    Sort
-                    <select value={customerSort} onChange={(event) => setCustomerSort(event.target.value as CustomerSort)}>
-                      {customerSortOptions.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-
-                <div className="customer-list-head">
-                  <strong>Saved Customers</strong>
-                  <span>{filteredCustomers.length} shown</span>
-                </div>
-
-                <div className="customer-picker-list">
-                  {filteredCustomers.length ? (
-                    filteredCustomers.map((profile) => (
-                      <div
-                        className={[
-                          'customer-picker-row',
-                          selectedCustomerId === profile.id ? 'active' : '',
-                          profile.creditBalance > 0 ? 'has-due' : '',
-                        ]
-                          .filter(Boolean)
-                          .join(' ')}
-                        key={profile.id}
-                      >
-                        <button className="customer-select-button" type="button" onClick={() => selectCustomerProfile(profile)}>
-                          <div className="customer-row-head">
-                            <strong className="customer-name-with-badge">
-                              {profile.name}
-                              {profile.creditBalance > 0 && <small className="due-badge">DUE</small>}
-                            </strong>
-                            <span>{profile.creditBalance > 0 ? money(profile.creditBalance) : 'No Due'}</span>
-                          </div>
-                          <span>{profile.phone || 'No phone'}</span>
-                        </button>
-                        <button
-                          className="customer-edit-button"
-                          type="button"
-                          onClick={() => editCustomerProfile(profile)}
-                          aria-label={`Edit ${profile.name}`}
-                          title={`Edit ${profile.name}`}
-                        >
-                          <Pencil size={16} />
-                        </button>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="empty-customer-list">
-                      {customers.length ? 'No matching customer' : 'No saved customers yet'}
-                    </div>
-                  )}
-                </div>
-              </section>
-
-              <section className="customer-detail-panel">
-                {selectedCustomerProfile && !customerDetailEditing ? (
-                  <>
-                    <div className="customer-readonly-head">
-                      <div>
-                        <span>Selected Customer</span>
-                        <strong>{selectedCustomerProfile.name}</strong>
-                      </div>
-                      <button
-                        className="small-button icon-only"
-                        type="button"
-                        onClick={() => editCustomerProfile(selectedCustomerProfile)}
-                        aria-label={`Edit ${selectedCustomerProfile.name}`}
-                        title={`Edit ${selectedCustomerProfile.name}`}
-                      >
-                        <Pencil size={16} />
-                      </button>
-                    </div>
-
-                    <div className="customer-summary-card">
-                      <div>
-                        <span>Mobile Number</span>
-                        <strong>{selectedCustomerProfile.phone || 'Not set'}</strong>
-                      </div>
-                      <div>
-                        <span>Balance Due</span>
-                        <strong className="customer-name-with-badge">
-                          {money(selectedCustomerProfile.creditBalance)}
-                          {selectedCustomerProfile.creditBalance > 0 && <small className="due-badge">DUE</small>}
-                        </strong>
-                      </div>
-                    </div>
-
-                    <div className="customer-due-section">
-                      <div className="customer-list-head">
-                        <strong>Unpaid Bills</strong>
-                        <span>{selectedCustomerUnpaidOrders.length} bill(s)</span>
-                      </div>
-                      <div className="customer-due-list">
-                        {selectedCustomerUnpaidOrders.length ? (
-                          selectedCustomerUnpaidOrders.map((order) => (
-                            <div className="customer-due-row" key={order.id}>
-                              <div>
-                                <span>Bill #{order.billNo}</span>
-                                <strong>{order.orderType} {order.table ? `/ ${order.table}` : ''}</strong>
-                              </div>
-                              <span>{formatDate(new Date(order.createdAt))}</span>
-                              <strong>{money(order.totals.balance)}</strong>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="empty-customer-list">No unpaid bills for this customer</div>
-                        )}
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="customer-readonly-head">
-                      <div>
-                        <span>{selectedCustomerProfile ? 'Edit Customer' : 'New Customer'}</span>
-                        <strong>{selectedCustomerProfile?.name || 'Enter customer details'}</strong>
-                      </div>
-                    </div>
-
-                    <div className="dialog-grid">
-                      <label className="dialog-field">
-                        Customer Name
-                        <input
-                          placeholder="Customer name"
-                          value={customer}
-                          onChange={(event) => setCustomer(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' && saveCustomerProfile()) {
-                              setCustomerDetailEditing(false)
-                            }
-                          }}
-                        />
-                      </label>
-
-                      <label className="dialog-field">
-                        Phone
-                        <input
-                          placeholder="Mobile number"
-                          value={customerPhone}
-                          onChange={(event) => setCustomerPhone(event.target.value)}
-                        />
-                      </label>
-                    </div>
-
-                    <label className="dialog-field">
-                      Address
-                      <textarea
-                        placeholder="Billing address"
-                        value={customerAddress}
-                        onChange={(event) => setCustomerAddress(event.target.value)}
-                      />
-                    </label>
-                  </>
-                )}
-
-                <div className="panel-actions customer-actions">
-                  <button className="small-button" type="button" onClick={clearCustomerProfile}>
-                    <Plus size={16} />
-                    New
-                  </button>
-                  <button
-                    className="small-button due-paid-button"
-                    type="button"
-                    disabled={!selectedCustomerProfile || selectedCustomerProfile.creditBalance <= 0}
-                    onClick={markSelectedCustomerDuePaid}
-                  >
-                    <BadgePercent size={16} />
-                    Mark Paid
-                  </button>
-                  <button
-                    className="small-button"
-                    disabled={Boolean(selectedCustomerProfile && !customerDetailEditing)}
-                    type="button"
-                    onClick={() => {
-                      if (saveCustomerProfile()) {
-                        setCustomerDetailEditing(false)
-                      }
-                    }}
-                  >
-                    <Save size={16} />
-                    Save Customer
-                  </button>
-                  <button className="small-button primary" type="button" onClick={() => setCustomerEditorOpen(false)}>
-                    <User size={16} />
-                    Done
-                  </button>
-                </div>
-              </section>
+            <div className="pos-customer-results-head">
+              <strong>{customerSearch ? 'Matching customers' : 'Recent customers'}</strong>
+              <div><span>{filteredCustomers.length} found</span><button type="button" onClick={() => { clearCustomerProfile(); setCustomerCreateOpen(true) }}>New Customer</button></div>
+            </div>
+            <div className="pos-customer-results">
+              {filteredCustomers.slice(0, 7).map((profile) => (
+                <button className={selectedCustomerId === profile.id ? 'active' : ''} key={profile.id} type="button" onClick={() => selectCustomerProfile(profile)}>
+                  <span className="pos-customer-choice"><strong>{profile.name}</strong><small>{profile.phone || 'No phone'}</small></span>
+                  <span className={profile.creditBalance > 0 ? 'pos-customer-due' : 'pos-customer-selected'}>{selectedCustomerId === profile.id ? 'Selected' : profile.creditBalance > 0 ? money(profile.creditBalance) : ''}</span>
+                </button>
+              ))}
+              {customerSearch && !filteredCustomers.length && <div className="empty-customer-list">No matching customer. Add them below.</div>}
+            </div>
+            {customerCreateOpen && <>
+              <div className="pos-customer-form-head">
+                <div><strong>New customer details</strong><span>Enter details and save to attach this customer to the bill.</span></div>
+                <button type="button" onClick={() => setCustomerCreateOpen(false)}>Cancel</button>
+              </div>
+              <div className="pos-customer-form">
+                <label className="dialog-field">Customer Name<input placeholder="Customer name" value={customer} onChange={(event) => setCustomer(event.target.value)} /></label>
+                <label className="dialog-field">Phone Number<input placeholder="Phone number" value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} /></label>
+                <label className="dialog-field wide-field">Address<textarea placeholder="Address" value={customerAddress} onChange={(event) => setCustomerAddress(event.target.value)} /></label>
+              </div>
+            </>}
+            <div className="panel-actions">
+              <button className="small-button" type="button" onClick={() => { setCustomerCreateOpen(false); setCustomerEditorOpen(false) }}>Done</button>
+              {customerCreateOpen && <button className="small-button primary" type="button" onClick={() => { if (saveCustomerProfile()) { setCustomerCreateOpen(false); setCustomerEditorOpen(false) } }}><Save size={16} /> Save Customer</button>}
             </div>
           </div>
         </div>
@@ -10272,6 +10188,41 @@ function App() {
               <button className="small-button primary" type="button" onClick={() => setDiscountEditorOpen(false)}>
                 <Save size={16} />
                 Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {kotNoteEditorOpen && (
+        <div className="modal-layer" role="dialog" aria-modal="true" aria-label="KOT note">
+          <div className="quick-panel kot-note-panel">
+            <div className="panel-head">
+              <div>
+                <strong>KOT Note</strong>
+                <span>Print this instruction at the bottom of every KOT for this order.</span>
+              </div>
+              <button type="button" onClick={() => setKotNoteEditorOpen(false)} title="Close">
+                <X size={18} />
+              </button>
+            </div>
+            <label className="dialog-field">
+              Kitchen instruction
+              <textarea
+                autoFocus
+                placeholder="Example: Serve all items together"
+                value={kotNote}
+                onChange={(event) => setKotNote(event.target.value)}
+              />
+            </label>
+            <div className="panel-actions">
+              <button className="small-button" type="button" onClick={() => setKotNote('')}>
+                <X size={16} />
+                Clear
+              </button>
+              <button className="small-button primary" type="button" onClick={() => setKotNoteEditorOpen(false)}>
+                <Save size={16} />
+                Save Note
               </button>
             </div>
           </div>
@@ -10392,7 +10343,6 @@ function App() {
             </div>
 
             {orderListMode === 'orders' && (
-              <>
               <div className="orders-date-filter">
                 <div className="orders-filter-fields">
                   <label>
@@ -10410,28 +10360,27 @@ function App() {
                   <small>Selected {selectedVisibleOrders.length} / {money(selectedOrdersTotal)}</small>
                 </div>
               </div>
-
-              <div className="orders-type-filter" aria-label="Order type filter">
-                <button
-                  className={orderListTypeFilter === 'all' ? 'active' : ''}
-                  type="button"
-                  onClick={() => setOrderListTypeFilter('all')}
-                >
-                  All
-                </button>
-                {orderTypes.map((type) => (
-                  <button
-                    className={orderListTypeFilter === type ? 'active' : ''}
-                    type="button"
-                    key={type}
-                    onClick={() => setOrderListTypeFilter(type)}
-                  >
-                    {type}
-                  </button>
-                ))}
-              </div>
-              </>
             )}
+
+            <div className="orders-type-filter" aria-label="Order type filter">
+              <button
+                className={orderListTypeFilter === 'all' ? 'active' : ''}
+                type="button"
+                onClick={() => setOrderListTypeFilter('all')}
+              >
+                All
+              </button>
+              {orderTypes.map((type) => (
+                <button
+                  className={orderListTypeFilter === type ? 'active' : ''}
+                  type="button"
+                  key={type}
+                  onClick={() => setOrderListTypeFilter(type)}
+                >
+                  {type}
+                </button>
+              ))}
+            </div>
 
             <div className="orders-select-toolbar">
               <label>
@@ -10462,7 +10411,7 @@ function App() {
 
             <div className="orders-list">
               {visibleOrders.map((order) => (
-                <article className={`saved-order ${order.status}`} key={order.id}>
+                <article className={`saved-order ${order.status}${order.kotPrinted ? ' kot-sent' : ''}`} key={order.id}>
                   <label className="order-select-cell" title={`Select bill ${order.billNo}`}>
                     <input
                       type="checkbox"
@@ -10472,7 +10421,7 @@ function App() {
                   </label>
                   <div>
                     <span>Bill #{order.billNo}</span>
-                    <strong>{order.orderType} {order.table ? `/ ${order.table}` : ''}</strong>
+                    <strong>{order.orderType} {order.table ? `/ ${order.table}` : ''} {order.kotPrinted ? <span className="kot-order-indicator" title={`KOT #${order.kotNo}`}>KOT #{order.kotNo}</span> : null}</strong>
                   </div>
                   <div>
                     <span>Status</span>
@@ -10550,6 +10499,43 @@ function App() {
               <button className="small-button danger" type="button" onClick={() => void confirmDeleteSelectedOrders()}>
                 <Trash2 size={16} />
                 Delete Orders
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingOrderSearchResult && (
+        <div className="modal-layer access-prompt-layer" role="dialog" aria-modal="true" aria-label="Save current order">
+          <div className="quick-panel access-prompt-panel">
+            <div className="panel-head">
+              <div>
+                <strong>Save Current Order?</strong>
+                <span>Bill {pendingOrderSearchResult.billNo} is ready to open</span>
+              </div>
+              <button type="button" onClick={() => setPendingOrderSearchResult(null)} title="Close">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="access-prompt-body">
+              <div className="access-prompt-icon">
+                <Save size={22} />
+              </div>
+              <div>
+                <strong>This bill has unsaved items</strong>
+                <p>Save it as an unclosed order before opening the selected Bill or KOT.</p>
+              </div>
+            </div>
+            <div className="panel-actions">
+              <button className="small-button" type="button" onClick={() => setPendingOrderSearchResult(null)}>
+                Cancel
+              </button>
+              <button className="small-button danger" type="button" onClick={discardAndOpenSearchOrder}>
+                Discard & Open
+              </button>
+              <button className="small-button primary" type="button" onClick={() => void saveAndOpenSearchOrder()}>
+                <Save size={16} />
+                Save & Open
               </button>
             </div>
           </div>
@@ -11228,7 +11214,7 @@ function App() {
                   </button>
                 </div>
                 <p className="printer-driver-note">
-                  Match this with the paper size selected in Windows Printer Preferences. Direct printing uses that Windows printer setting.
+                  Match paper width with Windows Printer Preferences. POS58 uses a compact receipt layout to prevent extra feed.
                 </p>
               </div>
 
@@ -11461,7 +11447,7 @@ function App() {
             <div className="panel-head">
               <div>
                 <strong>{variantPickerItem.name}</strong>
-                <span>Choose a size to add</span>
+                <span>Select a size to add to this bill</span>
               </div>
               <button type="button" onClick={() => setVariantPickerItem(null)} title="Close">
                 <X size={18} />
@@ -11477,7 +11463,7 @@ function App() {
                     setVariantPickerItem(null)
                   }}
                 >
-                  <span>{variant.name}</span>
+                  <span className="variant-picker-name">{variant.name}</span>
                   <strong>{money(variant.price)}</strong>
                 </button>
               ))}
@@ -12693,12 +12679,8 @@ function createPrinterProfileId() {
   return `printer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-function getInitialBillNumber(
-  orders: SavedOrder[],
-  referenceDate = new Date(),
-  resetFrequency: BillNumberResetFrequency = defaultAppConfiguration.billNumberResetFrequency,
-) {
-  const highestSavedBill = getHighestBillNumber(orders, referenceDate, resetFrequency)
+function getInitialBillNumber(orders: SavedOrder[]) {
+  const highestSavedBill = getHighestBillNumber(orders)
 
   if (highestSavedBill > 0) {
     return highestSavedBill + 1
@@ -12707,30 +12689,33 @@ function getInitialBillNumber(
   return firstBillNumber
 }
 
-function getNextBillNumber(
-  orders: SavedOrder[],
-  currentBillNumber: number,
-  referenceDate = new Date(),
-  resetFrequency: BillNumberResetFrequency = defaultAppConfiguration.billNumberResetFrequency,
-) {
-  const highestSavedBill = getHighestBillNumber(orders, referenceDate, resetFrequency)
+function getNextBillNumber(orders: SavedOrder[], currentBillNumber: number) {
+  const highestSavedBill = getHighestBillNumber(orders)
   return Math.max(currentBillNumber, highestSavedBill, firstBillNumber - 1) + 1
 }
 
-function getHighestBillNumber(orders: SavedOrder[], referenceDate = new Date(), resetFrequency: BillNumberResetFrequency = 'yearly') {
+function getHighestBillNumber(orders: SavedOrder[]) {
+  const financialYear = getFinancialYearKey(new Date())
   return orders
-    .filter((order) => getBillResetPeriodKey(new Date(order.createdAt || order.updatedAt), resetFrequency) === getBillResetPeriodKey(referenceDate, resetFrequency))
+    .filter((order) => getFinancialYearKey(new Date(order.createdAt || order.updatedAt)) === financialYear)
     .reduce((highest, order) => Math.max(highest, Number(order.billNo) || 0), 0)
 }
 
-function getBillResetPeriodKey(value: Date, resetFrequency: BillNumberResetFrequency) {
-  if (resetFrequency === 'daily') {
-    return formatDateInputValue(value)
-  }
-  if (resetFrequency === 'monthly') {
-    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}`
-  }
-  return String(value.getFullYear())
+function getInitialKotNumber(orders: SavedOrder[]) {
+  const highestKot = getHighestKotNumber(orders)
+  return highestKot > 0 ? highestKot + 1 : 1
+}
+
+function getHighestKotNumber(orders: SavedOrder[]) {
+  const today = formatDateInputValue(new Date())
+  return orders
+    .filter((order) => formatDateInputValue(new Date(order.createdAt || order.updatedAt)) === today)
+    .reduce((highest, order) => Math.max(highest, Number(order.kotNo) || 0), 0)
+}
+
+function getFinancialYearKey(value: Date) {
+  const year = value.getFullYear()
+  return value.getMonth() >= 3 ? `${year}-${year + 1}` : `${year - 1}-${year}`
 }
 
 function buildReport(orders: SavedOrder[], period?: ReportPeriod, expenses: ExpenseEntry[] = []) {
@@ -13337,6 +13322,8 @@ function normalizeSavedOrderPayment(order: SavedOrder): SavedOrder {
     serviceStaffId?: unknown
     serviceStaffName?: unknown
     serviceStaffCode?: unknown
+    kotNo?: unknown
+    kotNote?: unknown
   }
   const savedTables = parseDiningTableNames(legacyOrder.tables ?? getDiningTablesFromLabel(order.table))
   const discountMode = normalizeDiscountMode(legacyOrder.discountMode)
@@ -13368,6 +13355,8 @@ function normalizeSavedOrderPayment(order: SavedOrder): SavedOrder {
 
   return {
     ...order,
+    kotNo: String(legacyOrder.kotNo ?? '').trim() || undefined,
+    kotNote: normalizeLineDescription(legacyOrder.kotNote),
     orderType,
     customerId: order.customerId || undefined,
     serviceStaffId: String(legacyOrder.serviceStaffId ?? '').trim() || undefined,
@@ -13986,12 +13975,6 @@ function normalizeAppConfiguration(settings: Partial<AppConfiguration> = {}) {
       : [1, 5, 10, 15, 30, 60].includes(Number(settings.autoLogoutMinutes))
         ? Number(settings.autoLogoutMinutes)
         : defaultAppConfiguration.autoLogoutMinutes
-  const billNumberResetFrequency: BillNumberResetFrequency =
-    settings.billNumberResetFrequency === 'daily' ||
-    settings.billNumberResetFrequency === 'monthly' ||
-    settings.billNumberResetFrequency === 'yearly'
-      ? settings.billNumberResetFrequency
-      : defaultAppConfiguration.billNumberResetFrequency
   return {
     ...defaultAppConfiguration,
     showServiceStaffSelector:
@@ -13999,7 +13982,6 @@ function normalizeAppConfiguration(settings: Partial<AppConfiguration> = {}) {
         ? settings.showServiceStaffSelector
         : defaultAppConfiguration.showServiceStaffSelector,
     autoLogoutMinutes,
-    billNumberResetFrequency,
     enabledPaymentMethods: {
       UPI: typeof enabledPaymentMethods.UPI === 'boolean' ? enabledPaymentMethods.UPI : defaultAppConfiguration.enabledPaymentMethods.UPI,
       Card: typeof enabledPaymentMethods.Card === 'boolean' ? enabledPaymentMethods.Card : defaultAppConfiguration.enabledPaymentMethods.Card,

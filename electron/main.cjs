@@ -1117,7 +1117,6 @@ function buildReceiptHtml(payload) {
     business.branch || 'Main Branch',
     business.address,
     business.phone ? `Phone: ${business.phone}` : '',
-    business.email ? `Email: ${business.email}` : '',
     business.gstin ? `GSTIN: ${business.gstin}` : '',
   ]
     .filter(Boolean)
@@ -1131,15 +1130,14 @@ function buildReceiptHtml(payload) {
   const printableWidth = getPrintableHtmlWidthMm(paperWidth);
   const now = new Date(order.createdAt || Date.now());
   const staffName = order.serviceStaffName || order.cashier || 'Admin';
+  const totalQuantity = (order.items || []).reduce((sum, item) => sum + Number(item.qty || 0), 0);
   const itemRows = order.items
     .map(
       (item) => `
         <tr>
-          <td>
-            <strong>${escapeHtml(item.name)}</strong>
-            <span>${formatQty(item.qty)} x ${money(item.price)}</span>
-          </td>
-          <td>${money(item.total)}</td>
+          <td>${escapeHtml(item.name)}</td>
+          <td class="qty">${formatQty(item.qty)}</td>
+          <td class="amount">${money(item.total)}</td>
         </tr>
       `,
     )
@@ -1155,7 +1153,7 @@ function buildReceiptHtml(payload) {
           html { background: #fff; }
           body {
             margin: 0 auto;
-            padding: 1.5mm 1.5mm 4mm;
+            padding: 1.5mm 1.5mm ${paperWidth === 58 ? 1.5 : 3}mm;
             width: ${printableWidth}mm;
             background: #fff;
             color: #000;
@@ -1169,18 +1167,26 @@ function buildReceiptHtml(payload) {
           .logo { width: ${paperWidth === 58 ? 34 : 44}px; height: ${paperWidth === 58 ? 34 : 44}px; object-fit: contain; margin-bottom: 4px; }
           .shop { font-size: ${paperWidth === 58 ? 14 : 17}px; font-weight: 800; letter-spacing: .3px; }
           .muted { color: #000; font-weight: 600; }
-          .rule { border-top: 1px dashed #000; margin: 8px 0; }
+          .rule { border-top: 1px solid #000; margin: 8px 0; }
           .meta, .totals { width: 100%; border-collapse: collapse; table-layout: fixed; }
           .meta td, .totals td { padding: 2px 0; vertical-align: top; }
-          .meta td:first-child { width: 34%; }
-          .meta td:last-child { width: 66%; text-align: right; overflow-wrap: anywhere; }
+          .meta-grid { display: grid; grid-template-columns: minmax(0, 0.43fr) minmax(0, 0.57fr); gap: 7px; }
+          .meta-block { min-width: 0; }
+          .meta-block.right { text-align: right; }
+          .meta-row { display: flex; justify-content: space-between; gap: 4px; padding: 2px 0; min-width: 0; }
+          .meta-row span:first-child { flex: 0 0 auto; }
+          .meta-row span:last-child { min-width: 0; overflow-wrap: anywhere; word-break: break-word; text-align: right; }
+          .meta-row.kot-no { font-weight: 900; font-size: ${paperWidth === 58 ? 13 : 15}px; }
           .totals td:first-child { width: 46%; }
           .totals td:last-child { width: 54%; text-align: right; white-space: nowrap; padding-left: 3px; }
           table.items { width: 100%; border-collapse: collapse; table-layout: fixed; }
-          .items td { padding: 5px 0; border-bottom: 1px dotted #000; vertical-align: top; }
-          .items td:first-child { width: 64%; padding-right: 3px; overflow-wrap: anywhere; }
-          .items td:last-child { width: 36%; text-align: right; white-space: nowrap; padding-left: 3px; }
-          .items span { display: block; color: #000; margin-top: 1px; font-weight: 600; }
+          .items td { padding: 4px 0; vertical-align: top; }
+          .items td:first-child { width: 57%; padding-right: 2px; overflow-wrap: anywhere; }
+          .items td.qty { width: 16%; text-align: center; white-space: nowrap; }
+          .items td.amount { width: 27%; text-align: right; white-space: nowrap; padding-left: 2px; }
+          .items-head td { font-weight: 900; padding: 1px 0 3px; border-bottom: 1px solid #000; }
+          .items-head td.qty { text-align: center; }
+          .items-head td.amount { text-align: right; }
           .grand td { font-size: ${paperWidth === 58 ? 16 : 20}px; font-weight: 900; border-top: 2px solid #000; padding-top: 7px; }
           .thanks { margin-top: 10px; font-weight: 700; }
         </style>
@@ -1192,14 +1198,21 @@ function buildReceiptHtml(payload) {
           ${businessLines}
         </div>
         <div class="rule"></div>
-        <table class="meta">
-          <tr><td>Bill</td><td>${escapeHtml(order.billNo)}</td></tr>
-          <tr><td>Date</td><td>${escapeHtml(formatDateTime(now))}</td></tr>
-          <tr><td>Order</td><td>${escapeHtml(order.orderType)} ${order.table ? `/ ${escapeHtml(order.table)}` : ''}</td></tr>
-          <tr><td>Staff</td><td>${escapeHtml(staffName)}</td></tr>
-        </table>
+        <div class="meta-grid">
+          <div class="meta-block">
+            <div class="meta-row"><span>Bill</span><span>${escapeHtml(order.billNo)}</span></div>
+            <div class="meta-row kot-no"><span>KOT</span><span>${escapeHtml(order.kotNo || '')}</span></div>
+            ${order.customer ? `<div class="meta-row"><span>Name</span><span>${escapeHtml(order.customer)}</span></div>` : ''}
+          </div>
+          <div class="meta-block right">
+            <div class="meta-row"><span>Date</span><span>${escapeHtml(formatDateTime(now))}</span></div>
+            <div class="meta-row"><span>Order</span><span>${escapeHtml(order.orderType)}${order.table ? ` / ${escapeHtml(order.table)}` : ''}</span></div>
+            <div class="meta-row"><span>Staff</span><span>${escapeHtml(staffName)}</span></div>
+          </div>
+        </div>
         <div class="rule"></div>
-        <table class="items">${itemRows}</table>
+        <table class="items"><tr class="items-head"><td>Item</td><td class="qty">Qty</td><td class="amount">Amount</td></tr>${itemRows}</table>
+        <table class="totals"><tr><td>Total Qty</td><td>${formatQty(totalQuantity)}</td></tr></table>
         <div class="rule"></div>
         <table class="totals">
           <tr><td>Subtotal</td><td>${money(order.subtotal)}</td></tr>
@@ -1362,16 +1375,21 @@ function buildKotHtml(payload) {
           .center { text-align: center; }
           .title { font-size: ${paperWidth === 58 ? 18 : 22}px; font-weight: 900; letter-spacing: .8px; }
           .station { margin-top: 2px; font-size: ${paperWidth === 58 ? 14 : 16}px; font-weight: 800; }
-          .rule { border-top: 1px dashed #000; margin: 8px 0; }
-          .meta { width: 100%; border-collapse: collapse; table-layout: fixed; }
-          .meta td { padding: 2px 0; vertical-align: top; }
-          .meta td:first-child { width: 38%; }
-          .meta td:last-child { width: 62%; text-align: right; overflow-wrap: anywhere; }
+          .rule { border-top: 1px solid #000; margin: 8px 0; }
+          .meta-grid { display: grid; grid-template-columns: minmax(0, .43fr) minmax(0, .57fr); gap: 7px; }
+          .meta-block { min-width: 0; }
+          .meta-block.right { text-align: right; }
+          .meta-row { display: flex; justify-content: space-between; gap: 4px; padding: 2px 0; min-width: 0; }
+          .meta-row span:first-child { flex: 0 0 auto; }
+          .meta-row span:last-child { min-width: 0; overflow-wrap: anywhere; word-break: break-word; text-align: right; }
+          .meta-row.kot-no { font-weight: 900; font-size: ${paperWidth === 58 ? 13 : 15}px; }
           table.items { width: 100%; border-collapse: collapse; }
           .items td { padding: 7px 0; border-bottom: 1px dotted #000; vertical-align: top; }
           .items .qty { width: 34px; font-size: ${paperWidth === 58 ? 17 : 20}px; font-weight: 900; text-align: center; }
-          .items strong { display: block; font-size: ${paperWidth === 58 ? 13 : 15}px; }
-          .items span { display: block; margin-top: 2px; color: #000; font-weight: 600; }
+          .items strong { display: block; font-size: ${paperWidth === 58 ? 13 : 15}px; overflow-wrap: anywhere; }
+          .items span { display: block; margin-top: 2px; color: #000; font-weight: 600; overflow-wrap: anywhere; }
+          .order-note { margin-top: 8px; padding-top: 6px; border-top: 1px solid #000; overflow-wrap: anywhere; }
+          .order-note strong { display: block; margin-bottom: 3px; }
           .footer { margin-top: 10px; text-align: center; font-weight: 800; }
         </style>
       </head>
@@ -1381,14 +1399,21 @@ function buildKotHtml(payload) {
           <div class="station">${escapeHtml(kot.station || 'Kitchen')}</div>
         </div>
         <div class="rule"></div>
-        <table class="meta">
-          <tr><td>Bill</td><td>${escapeHtml(kot.billNo || '')}</td></tr>
-          <tr><td>Date</td><td>${escapeHtml(formatDateTime(now))}</td></tr>
-          <tr><td>Order</td><td>${escapeHtml(kot.orderType || '')} ${kot.table ? `/ ${escapeHtml(kot.table)}` : ''}</td></tr>
-          <tr><td>Staff</td><td>${escapeHtml(staffName)}</td></tr>
-        </table>
+        <div class="meta-grid">
+          <div class="meta-block">
+            <div class="meta-row"><span>Bill</span><span>${escapeHtml(kot.billNo || '')}</span></div>
+            <div class="meta-row kot-no"><span>KOT</span><span>${escapeHtml(kot.kotNo || '')}</span></div>
+            ${kot.customer ? `<div class="meta-row"><span>Name</span><span>${escapeHtml(kot.customer)}</span></div>` : ''}
+          </div>
+          <div class="meta-block right">
+            <div class="meta-row"><span>Date</span><span>${escapeHtml(formatDateTime(now))}</span></div>
+            <div class="meta-row"><span>Order</span><span>${escapeHtml(kot.orderType || '')}${kot.table ? ` / ${escapeHtml(kot.table)}` : ''}</span></div>
+            <div class="meta-row"><span>Staff</span><span>${escapeHtml(staffName)}</span></div>
+          </div>
+        </div>
         <div class="rule"></div>
         <table class="items">${itemRows}</table>
+        ${kot.note ? `<div class="order-note"><strong>KOT Note</strong><span>${escapeHtml(kot.note)}</span></div>` : ''}
         <div class="rule"></div>
         <div class="footer">Kitchen Order Ticket</div>
       </body>
@@ -1404,13 +1429,13 @@ function buildEscPosReceipt(payload) {
     business.branch || 'Main Branch',
     business.address,
     business.phone ? `Phone: ${business.phone}` : '',
-    business.email ? `Email: ${business.email}` : '',
     business.gstin ? `GSTIN: ${business.gstin}` : '',
   ].filter(Boolean);
   const footerNote = business.footerNote || 'Thank you. Visit again.';
   const columns = getEscPosColumns(payload?.settings);
   const parts = [];
   const staffName = order.serviceStaffName || order.cashier || 'Admin';
+  const totalQuantity = (order.items || []).reduce((sum, item) => sum + Number(item.qty || 0), 0);
 
   push(parts, [0x1b, 0x40]);
   align(parts, 1);
@@ -1420,22 +1445,33 @@ function buildEscPosReceipt(payload) {
   for (const businessLine of businessLines) {
     text(parts, `${businessLine}\n`);
   }
-  text(parts, line(columns));
+  text(parts, solidLine(columns));
   align(parts, 0);
   text(parts, twoCol('Bill', order.billNo, columns));
+  bold(parts, true);
+  text(parts, twoCol('KOT', order.kotNo || '', columns));
+  bold(parts, false);
   text(parts, twoCol('Date', formatDateTime(new Date(order.createdAt || Date.now())), columns));
   text(parts, twoCol('Order', `${order.orderType}${order.table ? ` / ${order.table}` : ''}`, columns));
+  if (order.customer) {
+    text(parts, twoCol('Name', order.customer, columns));
+  }
   text(parts, twoCol('Staff', staffName, columns));
-  text(parts, line(columns));
+  text(parts, solidLine(columns));
+
+  bold(parts, true);
+  text(parts, twoCol('Item', 'Qty Amount', columns));
+  bold(parts, false);
 
   for (const item of order.items) {
-    for (const wrapped of wrapText(item.name, columns - 12)) {
+    for (const wrapped of wrapText(item.name, columns - 14)) {
       text(parts, wrapped + '\n');
     }
     text(parts, twoCol(`${formatQty(item.qty)} x ${money(item.price)}`, money(item.total), columns));
   }
 
-  text(parts, line(columns));
+  text(parts, twoCol('Total Qty', formatQty(totalQuantity), columns));
+  text(parts, solidLine(columns));
   text(parts, twoCol('Subtotal', money(order.subtotal), columns));
   if (order.discount > 0) {
     text(parts, twoCol('Discount', `-${money(order.discount)}`, columns));
@@ -1447,7 +1483,7 @@ function buildEscPosReceipt(payload) {
   if (order.serviceCharge > 0) {
     text(parts, twoCol('Service Charge', money(order.serviceCharge), columns));
   }
-  text(parts, line(columns));
+  text(parts, solidLine(columns));
   bold(parts, true);
   align(parts, 1);
   size(parts, 0x11);
@@ -1456,9 +1492,9 @@ function buildEscPosReceipt(payload) {
   size(parts, 0x00);
   align(parts, 0);
   bold(parts, false);
-  text(parts, line(columns));
+  text(parts, solidLine(columns));
   align(parts, 1);
-  text(parts, `${footerNote}\n\n\n`);
+  text(parts, `${footerNote}\n${payload?.settings?.paperWidth === '58' ? '\n' : '\n\n'}`);
   push(parts, [0x1d, 0x56, 0x42, 0x00]);
 
   return Buffer.concat(parts);
@@ -1481,8 +1517,14 @@ function buildEscPosKot(payload) {
   text(parts, line(columns));
   align(parts, 0);
   text(parts, twoCol('Bill', kot.billNo || '', columns));
+  bold(parts, true);
+  text(parts, twoCol('KOT', kot.kotNo || '', columns));
+  bold(parts, false);
   text(parts, twoCol('Date', formatDateTime(new Date(kot.createdAt || Date.now())), columns));
   text(parts, twoCol('Order', `${kot.orderType || ''}${kot.table ? ` / ${kot.table}` : ''}`, columns));
+  if (kot.customer) {
+    text(parts, twoCol('Name', kot.customer, columns));
+  }
   text(parts, twoCol('Staff', staffName, columns));
   text(parts, line(columns));
 
@@ -1494,6 +1536,16 @@ function buildEscPosKot(payload) {
       for (const wrapped of wrapText(`Note: ${item.description}`, columns)) {
         text(parts, wrapped + '\n');
       }
+    }
+  }
+
+  if (kot.note) {
+    text(parts, line(columns));
+    bold(parts, true);
+    text(parts, 'KOT NOTE\n');
+    bold(parts, false);
+    for (const wrapped of wrapText(kot.note, columns)) {
+      text(parts, wrapped + '\n');
     }
   }
 
@@ -1577,7 +1629,7 @@ function buildEscPosReport(payload) {
     }
   }
 
-  text(parts, line(columns));
+  text(parts, solidLine(columns));
   align(parts, 1);
   text(parts, 'End of report\n\n\n');
   push(parts, [0x1d, 0x56, 0x42, 0x00]);
@@ -1645,6 +1697,10 @@ function size(parts, value) {
 
 function line(columns) {
   return `${'-'.repeat(columns)}\n`;
+}
+
+function solidLine(columns) {
+  return `${'_'.repeat(columns)}\n`;
 }
 
 function twoCol(left, right, columns) {
