@@ -117,11 +117,25 @@ https://goldensea.gihostings.in/admin
 Use `GI_CLOUD_ADMIN_TOKEN` to load clients. From there:
 
 1. Approve restaurant.
-2. Set plan and expiry date. Device count is unlimited.
+2. Set the compatible plan and expiry date. Premium and Offline allow one Windows device, Gold provides the Windows Main PC flow, and Android allows one native Android device.
 3. Reset the client portal password if the client forgets it.
 4. Ask the client to connect from desktop app `Home -> Cloud Sync` using phone/email and cloud password.
 
 The desktop app receives and saves `restaurant.id`, `device.id`, and `apiKey` automatically. Customers do not need to copy these IDs.
+
+### Android Plan
+
+Select `Android` in GI Cloud Admin for the native mobile billing application. During activation the mobile app sends `platform: android`; the server rejects platform/plan mismatches and returns the mobile capability set with the subscription.
+
+The initial Android plan includes:
+
+- one Android phone or tablet
+- offline-first SQLite billing after first activation
+- tables, menu management, customers, dues, and reports
+- Bluetooth and network POS58/POS80 printing
+- cloud backup and sync whenever internet is available
+
+Existing clients that do not send a platform remain backward compatible and are treated as Windows clients. The `devices.platform` column is created automatically when the cloud service starts; running `npm run migrate` remains recommended during deployment.
 
 Main app transfer flow:
 

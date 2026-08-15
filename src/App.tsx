@@ -2634,7 +2634,7 @@ function App() {
       const loginResponse = await fetch(`${apiUrl}/api/v1/client/login`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ login, password }),
+        body: JSON.stringify({ login, password, appPlatform: 'windows' }),
       })
       const loginResult = await parseCloudResponse<CloudLoginResponse>(loginResponse)
       const token = String(loginResult.token || '')
@@ -2709,6 +2709,7 @@ function App() {
           headers: { 'content-type': 'application/json', 'x-client-token': setupCloudToken },
           body: JSON.stringify({
             deviceName,
+            platform: 'windows',
             activationMode: isOfflineActivation ? 'offline' : 'cloud',
             deviceFingerprint,
             ...(transferCode ? { transferCode } : {}),
@@ -3678,7 +3679,7 @@ function App() {
       const loginResponse = await fetch(`${apiUrl}/api/v1/client/login`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ login, password }),
+        body: JSON.stringify({ login, password, appPlatform: 'windows' }),
       })
       const loginResult = await parseCloudResponse<CloudLoginResponse>(loginResponse)
       const token = String(loginResult.token || '')
@@ -3755,7 +3756,7 @@ function App() {
         {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-client-token': syncCloudToken },
-          body: JSON.stringify({ deviceName, ...(transferCode ? { transferCode } : {}) }),
+          body: JSON.stringify({ deviceName, platform: 'windows', ...(transferCode ? { transferCode } : {}) }),
         },
       )
       const result = await parseCloudResponse<CloudPairResponse>(activateResponse)

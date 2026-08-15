@@ -3,6 +3,12 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createPool } = require('./db');
+const {
+  getPlatformLoginError,
+  normalizeAppPlatform,
+  planSupportsPlatform,
+  restaurantSupportsPlatform,
+} = require('./platform-access');
 
 const PORT = Number(process.env.PORT || 8080);
 const ADMIN_TOKEN = process.env.GI_CLOUD_ADMIN_TOKEN || '';
@@ -27,6 +33,13 @@ const PLAN_CATALOG = [
     maxDevices: 1,
     counterLabel: '1 counter only',
     localPos: false,
+    platforms: ['windows'],
+    deviceLimits: { windows: 1, android: 0 },
+    capabilities: {
+      billing: true, tables: true, menuManagement: true, customers: true, dues: true,
+      reports: true, bluetoothPrinting: false, networkPrinting: true, cloudSync: true,
+      localPosServer: false, qrOrdering: false,
+    },
     features: [
       'One Windows billing counter',
       'Cloud backup and restore',
@@ -41,6 +54,13 @@ const PLAN_CATALOG = [
     maxDevices: UNLIMITED_DEVICE_LIMIT,
     counterLabel: 'Main PC plus local counters',
     localPos: true,
+    platforms: ['windows'],
+    deviceLimits: { windows: UNLIMITED_DEVICE_LIMIT, android: 0 },
+    capabilities: {
+      billing: true, tables: true, menuManagement: true, customers: true, dues: true,
+      reports: true, bluetoothPrinting: false, networkPrinting: true, cloudSync: true,
+      localPosServer: true, qrOrdering: true,
+    },
     features: [
       'Main PC local POS server included',
       'Other PCs and mobile devices can work through Main PC on LAN',
@@ -55,11 +75,40 @@ const PLAN_CATALOG = [
     maxDevices: 1,
     counterLabel: '1 offline PC',
     localPos: false,
+    platforms: ['windows'],
+    deviceLimits: { windows: 1, android: 0 },
+    capabilities: {
+      billing: true, tables: true, menuManagement: true, customers: true, dues: true,
+      reports: true, bluetoothPrinting: false, networkPrinting: true, cloudSync: false,
+      localPosServer: false, qrOrdering: false,
+    },
     features: [
       'One Windows billing counter',
       'One-time cloud activation and restore',
       'Local SQLite billing after activation',
       'No cloud backup, local POS server, or QR order portal',
+    ],
+  },
+  {
+    id: 'android',
+    name: 'Android',
+    subtitle: 'Native mobile POS with offline billing',
+    maxDevices: 1,
+    counterLabel: '1 Android device',
+    localPos: false,
+    platforms: ['android'],
+    deviceLimits: { windows: 0, android: 1 },
+    capabilities: {
+      billing: true, tables: true, menuManagement: true, customers: true, dues: true,
+      reports: true, bluetoothPrinting: true, networkPrinting: true, cloudSync: true,
+      localPosServer: false, qrOrdering: false,
+    },
+    features: [
+      'One native Android phone or tablet',
+      'Offline-first SQLite billing after activation',
+      'Bluetooth and network thermal printing',
+      'Cloud backup and sync when internet is available',
+      'Tables, menu, customers, dues, and reports',
     ],
   },
 ];
@@ -70,6 +119,7 @@ const PLAN_CARDS_HTML = PLAN_CATALOG.map(
       <h3>${plan.name}<span class="badge ${plan.id === 'gold' ? 'good' : ''}">${plan.counterLabel}</span></h3>
       <p>${plan.subtitle}</p>
       <div class="plan-meta">
+        <span class="badge">${plan.platforms.map((platform) => platform === 'android' ? 'Android' : 'Windows').join(' + ')}</span>
         <span class="badge ${plan.localPos ? 'good' : 'warn'}">${plan.localPos ? 'Local POS included' : 'Local POS not included'}</span>
         <span class="badge">Yearly / custom expiry</span>
       </div>
@@ -340,6 +390,7 @@ async function handleClientLogin(request, response) {
   const body = await readJson(request);
   const login = String(body.login || '').trim().toLowerCase();
   const password = String(body.password || '');
+  const appPlatform = normalizeAppPlatform(body.appPlatform);
 
   if (!login || !password) {
     sendJson(response, 400, { ok: false, error: 'Login and password are required' });
@@ -362,9 +413,18 @@ async function handleClientLogin(request, response) {
     return;
   }
 
+  if (appPlatform) {
+    const compatibleRestaurants = await getAccountRestaurants(account.id, appPlatform);
+    if (compatibleRestaurants.length === 0) {
+      sendJson(response, 403, { ok: false, error: getPlatformLoginError(appPlatform) });
+      return;
+    }
+  }
+
   sendJson(response, 200, {
     ok: true,
-    token: createClientToken(account.id),
+    token: createClientToken(account.id, appPlatform),
+    appPlatform,
     account: publicAccount(account),
   });
 }
@@ -420,7 +480,7 @@ async function handleClientMe(response, context) {
   sendJson(response, 200, {
     ok: true,
     account: publicAccount(context.account),
-    restaurants: await getAccountRestaurants(context.account.id),
+    restaurants: await getAccountRestaurants(context.account.id, context.appPlatform),
     planCatalog: PLAN_CATALOG,
     payment: {
       enabled: false,
@@ -494,8 +554,19 @@ async function handleClientPairingCode(request, response, context, restaurantId)
 async function handleClientDeviceActivate(request, response, context, restaurantId) {
   const body = await readJson(request);
   const deviceName = String(body.deviceName || MAIN_APP_DEVICE_NAME).trim() || MAIN_APP_DEVICE_NAME;
+  const devicePlatform = normalizeDevicePlatform(body.platform, deviceName);
   const transferCode = String(body.transferCode || '').replace(/\D/g, '');
   const deviceFingerprint = String(body.deviceFingerprint || '').trim();
+
+  if (!context.appPlatform) {
+    sendJson(response, 403, { ok: false, error: 'POS application login is required before activating a device' });
+    return;
+  }
+
+  if (devicePlatform !== context.appPlatform) {
+    sendJson(response, 403, { ok: false, error: 'The signed-in application platform does not match this device' });
+    return;
+  }
 
   if (transferCode && !/^\d{6}$/.test(transferCode)) {
     sendJson(response, 400, { ok: false, error: 'Valid 6 digit transfer code is required' });
@@ -537,6 +608,15 @@ async function handleClientDeviceActivate(request, response, context, restaurant
       return;
     }
     const decoratedSubscription = decorateSubscription(subscription);
+    if (!decoratedSubscription.plan_platforms.includes(devicePlatform)) {
+      await client.query('ROLLBACK');
+      const requestedApp = devicePlatform === 'android' ? 'Android app' : 'Windows app';
+      sendJson(response, 403, {
+        ok: false,
+        error: `${decoratedSubscription.plan_name} plan does not include the ${requestedApp}. Select a compatible plan in GI Cloud Admin.`,
+      });
+      return;
+    }
     const activationMode = decoratedSubscription.plan_id === 'offline' ? 'offline' : 'cloud';
 
     let transferPairing = null;
@@ -545,7 +625,7 @@ async function handleClientDeviceActivate(request, response, context, restaurant
     if (transferCode) {
       const transferResult = await client.query(
         `
-          SELECT id, device_name
+          SELECT id, device_name, platform
           FROM pairing_codes
           WHERE restaurant_id = $1
             AND code_hash = $2
@@ -565,6 +645,12 @@ async function handleClientDeviceActivate(request, response, context, restaurant
         return;
       }
 
+      if (transferPairing.platform !== devicePlatform) {
+        await client.query('ROLLBACK');
+        sendJson(response, 403, { ok: false, error: `This transfer code is for ${transferPairing.platform}, not ${devicePlatform}` });
+        return;
+      }
+
       const logoutResult = await client.query(
         `
           UPDATE devices
@@ -579,17 +665,17 @@ async function handleClientDeviceActivate(request, response, context, restaurant
     }
 
     if (!transferPairing) {
-      await enforcePlanDeviceLimit(client, restaurantId, subscription);
+      await enforcePlanDeviceLimit(client, restaurantId, decoratedSubscription, devicePlatform);
     }
 
     const apiKey = createApiKey();
     const deviceResult = await client.query(
       `
-        INSERT INTO devices (restaurant_id, name, api_key_hash)
-        VALUES ($1, $2, $3)
-        RETURNING id, restaurant_id, name, active, last_seen_at, created_at
+        INSERT INTO devices (restaurant_id, name, platform, api_key_hash)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, restaurant_id, name, platform, active, last_seen_at, created_at
       `,
-      [restaurantId, deviceName, hashSecret(apiKey)],
+      [restaurantId, deviceName, devicePlatform, hashSecret(apiKey)],
     );
     const device = deviceResult.rows[0];
 
@@ -761,11 +847,11 @@ async function handleDeviceRegister(request, response) {
     );
     const deviceResult = await client.query(
       `
-        INSERT INTO devices (restaurant_id, name, api_key_hash)
-        VALUES ($1, $2, $3)
-        RETURNING id, name, active, created_at
+        INSERT INTO devices (restaurant_id, name, platform, api_key_hash)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, name, platform, active, created_at
       `,
-      [restaurant.id, deviceName, apiKeyHash],
+      [restaurant.id, deviceName, plan.platforms[0], apiKeyHash],
     );
     await client.query('COMMIT');
 
@@ -825,7 +911,7 @@ async function handleAdminRestaurants(response) {
     LIMIT 200
   `);
   const devicesResult = await pool.query(`
-    SELECT id, restaurant_id, name, active, last_seen_at, created_at
+    SELECT id, restaurant_id, name, platform, active, last_seen_at, created_at
     FROM devices
     ORDER BY created_at DESC
     LIMIT 1000
@@ -882,6 +968,10 @@ async function handleAdminApprove(request, response, restaurantId) {
         RETURNING id, plan_name, status, starts_at, expires_at, max_devices
       `,
       [restaurantId, plan.name, expiresAt, maxDevices],
+    );
+    await client.query(
+      `UPDATE devices SET active = false, updated_at = now() WHERE restaurant_id = $1 AND NOT (platform = ANY($2::text[]))`,
+      [restaurantId, plan.platforms],
     );
     await client.query('COMMIT');
 
@@ -1013,15 +1103,16 @@ async function createPairingCodeForRestaurant(response, restaurantId, deviceName
       sendJson(response, 402, { ok: false, error: 'No active subscription for this restaurant' });
       return;
     }
+    const pairingPlatform = subscription.plan_platforms[0];
 
     const code = createPairingCode();
     const codeResult = await client.query(
       `
-        INSERT INTO pairing_codes (restaurant_id, code_hash, device_name, expires_at)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id, device_name, expires_at, created_at
+        INSERT INTO pairing_codes (restaurant_id, code_hash, device_name, platform, expires_at)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, device_name, platform, expires_at, created_at
       `,
-      [restaurantId, hashSecret(code), deviceName || MAIN_APP_DEVICE_NAME, expiresAt.toISOString()],
+      [restaurantId, hashSecret(code), deviceName || MAIN_APP_DEVICE_NAME, pairingPlatform, expiresAt.toISOString()],
     );
 
     sendJson(response, 201, {
@@ -1040,12 +1131,25 @@ async function createPairingCodeForRestaurant(response, restaurantId, deviceName
 async function handleAdminDeviceStatus(request, response, deviceId) {
   const body = await readJson(request);
   const active = Boolean(body.active);
+  if (active) {
+    const deviceResult = await pool.query('SELECT restaurant_id, platform FROM devices WHERE id = $1 LIMIT 1', [deviceId]);
+    const device = deviceResult.rows[0];
+    if (!device) {
+      sendJson(response, 404, { ok: false, error: 'Device not found' });
+      return;
+    }
+    const subscription = await getActiveSubscription(pool, device.restaurant_id);
+    if (!subscription || !subscription.plan_platforms.includes(device.platform)) {
+      sendJson(response, 403, { ok: false, error: 'This device platform is not included in the active subscription plan' });
+      return;
+    }
+  }
   const result = await pool.query(
     `
       UPDATE devices
       SET active = $1, updated_at = now()
       WHERE id = $2
-      RETURNING id, restaurant_id, name, active, last_seen_at, created_at
+      RETURNING id, restaurant_id, name, platform, active, last_seen_at, created_at
     `,
     [active, deviceId],
   );
@@ -1162,6 +1266,7 @@ async function handleDevicePair(request, response) {
   const body = await readJson(request);
   const code = String(body.code || '').replace(/\D/g, '');
   const deviceName = String(body.deviceName || MAIN_APP_DEVICE_NAME).trim();
+  const devicePlatform = normalizeDevicePlatform(body.platform, deviceName);
 
   if (!/^\d{6}$/.test(code)) {
     sendJson(response, 400, { ok: false, error: 'Valid 6 digit pairing code is required' });
@@ -1178,6 +1283,7 @@ async function handleDevicePair(request, response) {
           pc.id AS pairing_id,
           pc.restaurant_id,
           pc.device_name,
+          pc.platform,
           r.name AS restaurant_name,
           r.status AS restaurant_status
         FROM pairing_codes pc
@@ -1205,6 +1311,12 @@ async function handleDevicePair(request, response) {
       return;
     }
 
+    if (pairing.platform !== devicePlatform) {
+      await client.query('ROLLBACK');
+      sendJson(response, 403, { ok: false, error: `This pairing code is for ${pairing.platform}, not ${devicePlatform}` });
+      return;
+    }
+
     const subscription = await getActiveSubscription(client, pairing.restaurant_id);
     if (!subscription) {
       await client.query('ROLLBACK');
@@ -1212,15 +1324,21 @@ async function handleDevicePair(request, response) {
       return;
     }
 
-    await enforcePlanDeviceLimit(client, pairing.restaurant_id, subscription);
+    if (!subscription.plan_platforms.includes(devicePlatform)) {
+      await client.query('ROLLBACK');
+      sendJson(response, 403, { ok: false, error: 'This device platform is not included in the active subscription plan' });
+      return;
+    }
+
+    await enforcePlanDeviceLimit(client, pairing.restaurant_id, subscription, devicePlatform);
 
     const deviceResult = await client.query(
       `
-        INSERT INTO devices (restaurant_id, name, api_key_hash)
-        VALUES ($1, $2, $3)
-        RETURNING id, name, active, created_at
+        INSERT INTO devices (restaurant_id, name, platform, api_key_hash)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, name, platform, active, created_at
       `,
-      [pairing.restaurant_id, deviceName || pairing.device_name || MAIN_APP_DEVICE_NAME, hashSecret(apiKey)],
+      [pairing.restaurant_id, deviceName || pairing.device_name || MAIN_APP_DEVICE_NAME, devicePlatform, hashSecret(apiKey)],
     );
     const device = deviceResult.rows[0];
     await client.query('UPDATE pairing_codes SET used_at = now(), used_by_device = $1 WHERE id = $2', [
@@ -1365,6 +1483,7 @@ async function withDevice(request, response, handler) {
         d.id,
         d.restaurant_id,
         d.api_key_hash,
+        d.platform,
         r.name AS restaurant_name,
         r.owner_name,
         r.phone,
@@ -1392,6 +1511,15 @@ async function withDevice(request, response, handler) {
   const subscription = await getActiveSubscription(pool, restaurantId);
   if (!subscription) {
     sendJson(response, 402, { ok: false, error: 'Subscription is not active or expired' });
+    return;
+  }
+
+  if (!planSupportsPlatform(getPlanDefinition(subscription.plan_name, subscription.max_devices), device.platform)) {
+    await pool.query('UPDATE devices SET active = false, updated_at = now() WHERE id = $1', [deviceId]);
+    sendJson(response, 403, {
+      ok: false,
+      error: 'This device is no longer included in the current subscription plan. Sign in with a compatible app or contact the administrator.',
+    });
     return;
   }
 
@@ -1435,10 +1563,10 @@ async function withClient(request, response, handler) {
     return;
   }
 
-  await handler({ account });
+  await handler({ account, appPlatform: tokenPayload.appPlatform || null });
 }
 
-async function getAccountRestaurants(accountId) {
+async function getAccountRestaurants(accountId, appPlatform = null) {
   const restaurantsResult = await pool.query(
     `
       SELECT
@@ -1481,7 +1609,7 @@ async function getAccountRestaurants(accountId) {
   );
   const devicesResult = await pool.query(
     `
-      SELECT d.id, d.restaurant_id, d.name, d.active, d.last_seen_at, d.created_at
+      SELECT d.id, d.restaurant_id, d.name, d.platform, d.active, d.last_seen_at, d.created_at
       FROM devices d
       JOIN restaurants r ON r.id = d.restaurant_id
       WHERE r.account_id = $1
@@ -1497,16 +1625,18 @@ async function getAccountRestaurants(accountId) {
     devicesByRestaurant.set(device.restaurant_id, list);
   }
 
-  return restaurantsResult.rows.map((restaurant) => {
-    const { staff_users: staffUsers, ...rest } = restaurant;
-    const decoratedRestaurant = decorateRestaurantPlanFields(rest);
+  return restaurantsResult.rows
+    .filter((restaurant) => restaurantSupportsPlatform(restaurant, appPlatform, getPlanDefinition))
+    .map((restaurant) => {
+      const { staff_users: staffUsers, ...rest } = restaurant;
+      const decoratedRestaurant = decorateRestaurantPlanFields(rest);
 
-    return {
-      ...decoratedRestaurant,
-      devices: devicesByRestaurant.get(restaurant.id) || [],
-      staffUsers: normalizeStaffDirectory(staffUsers),
-    };
-  });
+      return {
+        ...decoratedRestaurant,
+        devices: devicesByRestaurant.get(restaurant.id) || [],
+        staffUsers: normalizeStaffDirectory(staffUsers),
+      };
+    });
 }
 
 async function getAccountRestaurant(accountId, restaurantId) {
@@ -1671,9 +1801,10 @@ function publicAccount(account) {
   };
 }
 
-function createClientToken(accountId) {
+function createClientToken(accountId, appPlatform = null) {
   const payload = {
     accountId,
+    ...(appPlatform ? { appPlatform } : {}),
     expiresAt: Date.now() + CLIENT_TOKEN_TTL_MS,
   };
   const body = base64UrlEncode(JSON.stringify(payload));
@@ -1746,6 +1877,10 @@ function normalizePlanId(value, maxDevices = 0) {
     return 'offline';
   }
 
+  if (planText.includes('android') || planText.includes('mobile')) {
+    return 'android';
+  }
+
   if (Number(maxDevices || 0) >= UNLIMITED_DEVICE_LIMIT) {
     return 'gold';
   }
@@ -1777,6 +1912,9 @@ function decorateSubscription(subscription) {
     plan_features: plan.features,
     plan_local_pos: plan.localPos,
     plan_counter_label: plan.counterLabel,
+    plan_platforms: plan.platforms,
+    plan_device_limits: plan.deviceLimits,
+    plan_capabilities: plan.capabilities,
     max_devices: Number(subscription.max_devices || plan.maxDevices),
   };
 }
@@ -1805,12 +1943,24 @@ function decorateRestaurantPlanFields(restaurant) {
     plan_features: subscription.plan_features,
     plan_local_pos: subscription.plan_local_pos,
     plan_counter_label: subscription.plan_counter_label,
+    plan_platforms: subscription.plan_platforms,
+    plan_device_limits: subscription.plan_device_limits,
+    plan_capabilities: subscription.plan_capabilities,
     max_devices: subscription.max_devices,
   };
 }
 
-async function enforcePlanDeviceLimit(client, restaurantId, subscription) {
-  const maxDevices = Number(subscription?.max_devices || getPlanMaxDevices(subscription?.plan_name));
+function normalizeDevicePlatform(value, deviceName = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'android' || normalized === 'windows') {
+    return normalized;
+  }
+  return /android|mobile/i.test(String(deviceName || '')) ? 'android' : 'windows';
+}
+
+async function enforcePlanDeviceLimit(client, restaurantId, subscription, platform = 'windows') {
+  const plan = getPlanDefinition(subscription?.plan_name, subscription?.max_devices);
+  const maxDevices = Number(plan.deviceLimits?.[platform] ?? subscription?.max_devices ?? plan.maxDevices);
   if (maxDevices >= UNLIMITED_DEVICE_LIMIT) {
     return true;
   }
@@ -1821,8 +1971,9 @@ async function enforcePlanDeviceLimit(client, restaurantId, subscription) {
       FROM devices
       WHERE restaurant_id = $1
         AND active = true
+        AND platform = $2
     `,
-    [restaurantId],
+    [restaurantId, platform],
   );
   const activeDevices = Number(result.rows[0]?.active_devices || 0);
 
@@ -1830,9 +1981,8 @@ async function enforcePlanDeviceLimit(client, restaurantId, subscription) {
     return true;
   }
 
-  const error = new Error(
-    'Premium plan allows one counter only. Generate a Transfer Code from Client Portal to move this app, or upgrade to Gold for local POS / multi-counter.',
-  );
+  const deviceLabel = platform === 'android' ? 'Android device' : 'Windows counter';
+  const error = new Error(`${plan.name} plan allows ${maxDevices} active ${deviceLabel}${maxDevices === 1 ? '' : 's'} only. Deactivate or transfer the existing device before activating another one.`);
   error.statusCode = 409;
   throw error;
 }
@@ -2019,6 +2169,9 @@ function getPublicConfig(request) {
       localPos: plan.localPos,
       maxDevices: plan.maxDevices,
       counterLabel: plan.counterLabel,
+      platforms: plan.platforms,
+      deviceLimits: plan.deviceLimits,
+      capabilities: plan.capabilities,
     })),
   };
 }
@@ -2632,8 +2785,8 @@ function createConnectHtml(request) {
         </article>
         <article class="card panel">
           <span class="eyebrow">Plans</span>
-          <h3>Premium / Gold</h3>
-          <p>Premium is one counter. Gold includes Main PC local POS plus LAN counters/mobile browser.</p>
+          <h3>Four subscription plans</h3>
+          <p>Premium, Gold, and Offline serve Windows POS. Android is for the native mobile billing app.</p>
         </article>
       </section>
 
@@ -2663,7 +2816,7 @@ function createConnectHtml(request) {
         <div class="step-list" style="color:#08111f">
           <div style="background:#f8fafc;border-color:#dbe3ee">1. Client signs up from the public signup page.</div>
           <div style="background:#f8fafc;border-color:#dbe3ee">2. GI admin approves plan and expiry.</div>
-          <div style="background:#f8fafc;border-color:#dbe3ee">3. Desktop app logs in with Cloud URL, phone/email, and cloud password.</div>
+          <div style="background:#f8fafc;border-color:#dbe3ee">3. The approved Windows or Android app signs in and activates.</div>
           <div style="background:#f8fafc;border-color:#dbe3ee">4. Enable Auto Sync after first successful restore.</div>
         </div>
       </section>
@@ -2701,12 +2854,12 @@ const SIGNUP_HTML = `<!doctype html>
         <div class="stack">
           <span class="eyebrow" style="color:#fff">GI Hostings Cloud</span>
           <h2>Start restaurant cloud access with a clean approval flow.</h2>
-          <p>Signup creates the client account and business profile. GI admin approves the subscription, then the Windows POS can login and sync.</p>
+          <p>Signup creates the client account and business profile. GI admin approves the subscription, then the compatible Windows or Android POS can activate.</p>
         </div>
         <div class="step-list">
           <div>1. Submit business and owner details</div>
           <div>2. Admin approves subscription period</div>
-          <div>3. Desktop app connects with phone/email and password</div>
+          <div>3. Approved POS app connects with phone/email and password</div>
         </div>
         <div class="hero-badges">
           <span>Local POS</span>
@@ -2860,7 +3013,7 @@ const PORTAL_HTML = `<!doctype html>
           <div>
             <span class="eyebrow">Plans</span>
             <h2>Current and Available Plans</h2>
-            <p>Premium is for one billing counter. Gold includes Main PC local POS server for local counters and mobile use.</p>
+          <p>Premium, Gold, and Offline are Windows plans. Android provides native mobile billing with offline operation and cloud sync.</p>
           </div>
         </div>
         <div class="plan-grid" id="portalPlanRows"></div>
@@ -3028,7 +3181,7 @@ const PORTAL_HTML = `<!doctype html>
         return '<article class="plan-card ' + (active ? 'current-plan-card' : '') + '">' +
           '<h3>' + esc(plan.name) + '<span class="badge ' + (active ? 'good' : '') + '">' + (active ? 'Current' : 'Available') + '</span></h3>' +
           '<p>' + esc(plan.subtitle) + '</p>' +
-          '<div class="plan-meta"><span class="badge">' + esc(plan.counterLabel) + '</span><span class="badge ' + (plan.localPos ? 'good' : 'warn') + '">' + (plan.localPos ? 'Local POS included' : 'Local POS not included') + '</span></div>' +
+          '<div class="plan-meta"><span class="badge">' + esc(plan.counterLabel) + '</span><span class="badge">' + esc((plan.platforms || []).map(function (platform) { return platform === 'android' ? 'Android' : 'Windows'; }).join(' + ')) + '</span><span class="badge ' + (plan.localPos ? 'good' : 'warn') + '">' + (plan.localPos ? 'Local POS included' : 'Local POS not included') + '</span></div>' +
           planFeaturesHtml(plan) +
         '</article>';
       }).join('');
@@ -3048,12 +3201,13 @@ const PORTAL_HTML = `<!doctype html>
         const devices = String(restaurant.active_devices || 0);
         const plan = getPlan(restaurant.plan_name);
         const deviceList = (restaurant.devices || []).map(function (device) {
-          return esc(device.name) + (device.active ? '' : ' (disabled)');
+          const platform = device.platform === 'android' ? 'Android' : 'Windows';
+          return esc(device.name) + ' / ' + platform + (device.active ? '' : ' (disabled)');
         }).join('');
         return '<article class="restaurant-card ' + cardClass + '">' +
           '<div class="restaurant-main">' +
             '<div class="restaurant-title"><strong>' + esc(restaurant.name) + '</strong><small>' + esc(restaurant.id) + '</small><span class="badge ' + badgeClass + '">' + esc(restaurant.status) + '</span></div>' +
-            '<div><span class="eyebrow">Subscription</span><p>' + esc(subscriptionText(restaurant)) + '</p><div class="plan-meta"><span class="badge ' + (canPair ? 'good' : 'warn') + '">' + (canPair ? 'Cloud login ready' : 'Approval required') + '</span><span class="badge">' + esc(plan ? plan.counterLabel : 'Plan pending') + '</span><span class="badge ' + (plan && plan.localPos ? 'good' : 'warn') + '">' + (plan && plan.localPos ? 'Local POS included' : 'Local POS not included') + '</span></div></div>' +
+            '<div><span class="eyebrow">Subscription</span><p>' + esc(subscriptionText(restaurant)) + '</p><div class="plan-meta"><span class="badge ' + (canPair ? 'good' : 'warn') + '">' + (canPair ? 'App activation ready' : 'Approval required') + '</span><span class="badge">' + esc(plan ? plan.counterLabel : 'Plan pending') + '</span><span class="badge">' + esc(plan ? (plan.platforms || []).map(function (platform) { return platform === 'android' ? 'Android' : 'Windows'; }).join(' + ') : 'Platform pending') + '</span><span class="badge ' + (plan && plan.localPos ? 'good' : 'warn') + '">' + (plan && plan.localPos ? 'Local POS included' : 'Local POS not included') + '</span></div></div>' +
             '<div><span class="eyebrow">Devices</span><p>' + esc(devices) + ' active</p><div class="device-list">' + (deviceList || 'No devices connected') + '</div></div>' +
           '</div>' +
         '</article>';
@@ -3312,11 +3466,12 @@ const ADMIN_HTML = `<!doctype html>
           <div class="stack">
             <span class="eyebrow">GI Cloud Control</span>
             <h2>Subscription, release, and client access in one place.</h2>
-            <p>Approve new restaurants, renew Premium or Gold plans, upload desktop releases, and reset client portal access from this panel.</p>
+            <p>Approve restaurants, manage Windows and Android plans, upload desktop releases, and reset client portal access from this panel.</p>
           </div>
           <div class="admin-hero-points">
             <span>Premium: 1 counter</span>
             <span>Gold: local POS server</span>
+            <span>Android: native mobile POS</span>
             <span>Manual subscription payment</span>
           </div>
         </div>
@@ -3400,7 +3555,7 @@ const ADMIN_HTML = `<!doctype html>
           <div>
             <span class="eyebrow">Plan Cards</span>
             <h2>Subscription Plans</h2>
-            <p>Premium is one counter. Gold is for Main PC local POS server. During desktop activation, either plan can run in Cloud or Offline mode.</p>
+            <p>Choose Premium, Gold, or Offline for Windows. Choose Android for the native mobile billing application.</p>
           </div>
           <div class="admin-note-row">
             <span>Yearly default</span>
@@ -3552,7 +3707,7 @@ const ADMIN_HTML = `<!doctype html>
         return '<article class="plan-card ' + (plan.id === 'gold' ? 'featured' : '') + '">' +
           '<h3>' + esc(plan.name) + '<span class="badge ' + (plan.id === 'gold' ? 'good' : '') + '">' + esc(plan.counterLabel) + '</span></h3>' +
           '<p>' + esc(plan.subtitle) + '</p>' +
-          '<div class="plan-meta"><span class="badge ' + (plan.localPos ? 'good' : 'warn') + '">' + (plan.localPos ? 'Local POS included' : 'Local POS not included') + '</span><span class="badge">Yearly / custom expiry</span></div>' +
+          '<div class="plan-meta"><span class="badge">' + esc((plan.platforms || []).map(function (platform) { return platform === 'android' ? 'Android' : 'Windows'; }).join(' + ')) + '</span><span class="badge ' + (plan.localPos ? 'good' : 'warn') + '">' + (plan.localPos ? 'Local POS included' : 'Local POS not included') + '</span><span class="badge">Yearly / custom expiry</span></div>' +
           planFeaturesHtml(plan) +
         '</article>';
       }).join('');
@@ -3730,7 +3885,8 @@ const ADMIN_HTML = `<!doctype html>
         const expiryValue = dateInputValue(restaurant.expires_at);
         const selectedPlan = getPlan(planValue);
         const deviceList = (restaurant.devices || []).slice(0, 4).map(function (device) {
-          return esc(device.name) + ' - ' + (device.active ? 'active' : 'disabled') + (device.last_seen_at ? ' / ' + esc(formatDate(device.last_seen_at)) : '');
+          const platform = device.platform === 'android' ? 'Android' : 'Windows';
+          return esc(device.name) + ' / ' + platform + ' - ' + (device.active ? 'active' : 'disabled') + (device.last_seen_at ? ' / ' + esc(formatDate(device.last_seen_at)) : '');
         }).join('<br>');
         return '<article class="restaurant-card admin-client-card ' + cardClass + '">' +
           '<div class="restaurant-main">' +
@@ -3745,7 +3901,7 @@ const ADMIN_HTML = `<!doctype html>
             '</div>' +
             '<div class="subscription-box">' +
               '<div class="toolbar"><div><span class="eyebrow">Subscription</span><p>' + esc(subscriptionText(restaurant)) + '</p></div><span class="badge ' + subscription.className + '">' + esc(subscription.label) + '</span></div>' +
-              '<div class="plan-meta"><span class="badge">' + esc(selectedPlan.counterLabel) + '</span><span class="badge ' + (selectedPlan.localPos ? 'good' : 'warn') + '">' + (selectedPlan.localPos ? 'Local POS included' : 'Local POS not included') + '</span></div>' +
+              '<div class="plan-meta"><span class="badge">' + esc(selectedPlan.counterLabel) + '</span><span class="badge">' + esc((selectedPlan.platforms || []).map(function (platform) { return platform === 'android' ? 'Android' : 'Windows'; }).join(' + ')) + '</span><span class="badge ' + (selectedPlan.localPos ? 'good' : 'warn') + '">' + (selectedPlan.localPos ? 'Local POS included' : 'Local POS not included') + '</span></div>' +
               '<div class="subscription-edit">' +
                 '<label>Plan <select data-plan-input>' + planOptionsHtml(planValue) + '</select></label>' +
                 '<label>Period <select data-duration-input><option value="1">1 Year</option><option value="2">2 Years</option><option value="3">3 Years</option><option value="custom" selected>Custom</option></select></label>' +
@@ -3852,6 +4008,9 @@ async function ensureRuntimeSchema() {
     ALTER TABLE accounts ADD COLUMN IF NOT EXISTS recovery_code_hash TEXT NOT NULL DEFAULT '';
     ALTER TABLE accounts ADD COLUMN IF NOT EXISTS recovery_code_set_at TIMESTAMPTZ;
     ALTER TABLE subscriptions ALTER COLUMN max_devices SET DEFAULT 999999;
+    ALTER TABLE devices ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'windows';
+    ALTER TABLE pairing_codes ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'windows';
+    CREATE INDEX IF NOT EXISTS devices_restaurant_platform_idx ON devices(restaurant_id, platform, active);
   `);
 }
 

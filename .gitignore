@@ -35,3 +35,7 @@ cloud with plan gold and premium.zip
 **/local.properties
 *.apk
 *.aab
+
+# Private signing certificates
+*.pfx
+*.p12

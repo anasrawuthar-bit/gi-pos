@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS devices (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  platform TEXT NOT NULL DEFAULT 'windows' CHECK (platform IN ('windows', 'android')),
   api_key_hash TEXT NOT NULL,
   active BOOLEAN NOT NULL DEFAULT true,
   last_seen_at TIMESTAMPTZ,
@@ -56,7 +57,12 @@ CREATE TABLE IF NOT EXISTS devices (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'windows';
+ALTER TABLE devices DROP CONSTRAINT IF EXISTS devices_platform_check;
+ALTER TABLE devices ADD CONSTRAINT devices_platform_check CHECK (platform IN ('windows', 'android'));
+
 CREATE INDEX IF NOT EXISTS devices_restaurant_id_idx ON devices(restaurant_id);
+CREATE INDEX IF NOT EXISTS devices_restaurant_platform_idx ON devices(restaurant_id, platform, active);
 
 CREATE TABLE IF NOT EXISTS subscriptions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -86,11 +92,14 @@ CREATE TABLE IF NOT EXISTS pairing_codes (
   restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
   code_hash TEXT NOT NULL,
   device_name TEXT NOT NULL DEFAULT 'POS Counter',
+  platform TEXT NOT NULL DEFAULT 'windows' CHECK (platform IN ('windows', 'android')),
   expires_at TIMESTAMPTZ NOT NULL,
   used_at TIMESTAMPTZ,
   used_by_device UUID REFERENCES devices(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE pairing_codes ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'windows';
 
 CREATE INDEX IF NOT EXISTS pairing_codes_code_hash_idx ON pairing_codes(code_hash);
 CREATE INDEX IF NOT EXISTS pairing_codes_restaurant_idx ON pairing_codes(restaurant_id, expires_at);

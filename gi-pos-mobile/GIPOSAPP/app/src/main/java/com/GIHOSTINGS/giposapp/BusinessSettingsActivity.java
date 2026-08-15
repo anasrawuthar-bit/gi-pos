@@ -1,0 +1,29 @@
+package com.GIHOSTINGS.giposapp;
+
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.os.Bundle;
+import android.text.InputType;
+import android.view.Gravity;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.appcompat.app.AppCompatActivity;
+
+public class BusinessSettingsActivity extends InsetActivity {
+  private final int ink=Color.rgb(18,32,51),red=Color.rgb(199,22,55),muted=Color.rgb(99,115,138),line=Color.rgb(217,226,236),surface=Color.rgb(244,247,250);
+  private PosDatabase db; private EditText name,address,phone,taxId,footer; private CheckBox upi,card,due,split;
+  @Override public void onCreate(Bundle state){super.onCreate(state);db=PosDatabase.get(this);build();}
+  private void build(){PosDatabase.BusinessSettings current=db.businessSettings();LinearLayout page=column();page.setPadding(dp(18),dp(16),dp(18),dp(28));page.setBackgroundColor(surface);LinearLayout head=row();head.setGravity(Gravity.CENTER_VERTICAL);Button back=button("<",Color.WHITE,ink);back.setTextSize(20);back.setOnClickListener(v->finish());head.addView(back,new LinearLayout.LayoutParams(dp(44),dp(44)));LinearLayout title=column();title.setPadding(dp(11),0,0,0);title.addView(text("Business & Billing",24,ink,true));title.addView(text("Receipt identity and payment methods",13,muted,false));head.addView(title,new LinearLayout.LayoutParams(0,-2,1));page.addView(head);
+    LinearLayout receipt=panel("Receipt details");name=input("Business name",InputType.TYPE_CLASS_TEXT);address=input("Address",InputType.TYPE_CLASS_TEXT);phone=input("Phone",InputType.TYPE_CLASS_PHONE);taxId=input("GSTIN / VAT number",InputType.TYPE_CLASS_TEXT);footer=input("Receipt footer",InputType.TYPE_CLASS_TEXT);name.setText(current.name);address.setText(current.address);phone.setText(current.phone);taxId.setText(current.taxId);footer.setText(current.footer);receipt.addView(field("Business name",name));receipt.addView(field("Address",address),top(11));receipt.addView(field("Phone",phone),top(11));receipt.addView(field("Tax ID",taxId),top(11));receipt.addView(field("Receipt footer",footer),top(11));page.addView(receipt,top(18));
+    LinearLayout payments=panel("Payment methods");payments.addView(text("Cash is always available. Enable only the methods used at this counter.",13,muted,false),top(4));upi=check("UPI",current.upi);card=check("Card",current.card);due=check("Customer due",current.due);split=check("Split payment",current.split);payments.addView(upi,top(10));payments.addView(card);payments.addView(due);payments.addView(split);page.addView(payments,top(14));
+    Button save=button("Save",red,Color.WHITE);save.setOnClickListener(v->save());page.addView(save,topHeight(18,52));ScrollView scroll=new ScrollView(this);scroll.addView(page);setContentView(scroll);}
+  private void save(){String business=name.getText().toString().trim();if(business.isEmpty()){name.setError("Business name is required");name.requestFocus();return;}db.saveBusinessSettings(new PosDatabase.BusinessSettings(business,address.getText().toString(),phone.getText().toString(),taxId.getText().toString(),footer.getText().toString(),upi.isChecked(),card.isChecked(),due.isChecked(),split.isChecked()));CloudSyncManager.syncAsync(this);Toast.makeText(this,"Billing settings saved",Toast.LENGTH_SHORT).show();finish();}
+  private CheckBox check(String label,boolean checked){CheckBox value=new CheckBox(this);value.setText(label);value.setTextSize(15);value.setTextColor(ink);value.setChecked(checked);value.setMinHeight(dp(44));return value;}private LinearLayout field(String label,EditText input){LinearLayout box=column();box.addView(text(label,12,muted,true));box.addView(input,new LinearLayout.LayoutParams(-1,dp(48)));return box;}private EditText input(String hint,int type){EditText value=new EditText(this);value.setHint(hint);value.setHintTextColor(muted);value.setInputType(type);value.setSingleLine();value.setTextSize(15);value.setTextColor(ink);value.setPadding(dp(12),0,dp(12),0);value.setBackground(shape(Color.rgb(248,250,252),9,1,line));return value;}private LinearLayout panel(String title){LinearLayout value=column();value.setPadding(dp(15),dp(14),dp(15),dp(16));value.setBackground(shape(Color.WHITE,12,1,line));value.addView(text(title,17,ink,true));return value;}private LinearLayout column(){LinearLayout value=new LinearLayout(this);value.setOrientation(LinearLayout.VERTICAL);return value;}private LinearLayout row(){LinearLayout value=new LinearLayout(this);value.setOrientation(LinearLayout.HORIZONTAL);return value;}private TextView text(String value,int size,int color,boolean bold){TextView view=new TextView(this);view.setText(value);view.setTextSize(size);view.setTextColor(color);if(bold)view.setTypeface(Typeface.DEFAULT_BOLD);return view;}private Button button(String value,int fill,int color){Button view=new Button(this);view.setText(value);view.setAllCaps(false);view.setTextColor(color);view.setTypeface(Typeface.DEFAULT_BOLD);view.setBackground(shape(fill,9,1,line));return view;}private GradientDrawable shape(int fill,int radius,int stroke,int strokeColor){GradientDrawable value=new GradientDrawable();value.setColor(fill);value.setCornerRadius(dp(radius));if(stroke>0)value.setStroke(dp(stroke),strokeColor);return value;}private LinearLayout.LayoutParams top(int margin){LinearLayout.LayoutParams value=new LinearLayout.LayoutParams(-1,-2);value.topMargin=dp(margin);return value;}private LinearLayout.LayoutParams topHeight(int margin,int height){LinearLayout.LayoutParams value=new LinearLayout.LayoutParams(-1,dp(height));value.topMargin=dp(margin);return value;}private int dp(int value){return(int)(value*getResources().getDisplayMetrics().density);}
+}
