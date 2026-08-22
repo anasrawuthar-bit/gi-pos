@@ -72,9 +72,15 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   starts_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   expires_at TIMESTAMPTZ NOT NULL,
   max_devices INTEGER NOT NULL DEFAULT 999999,
+  max_users INTEGER,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS max_users INTEGER;
+ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_max_users_check;
+ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_max_users_check
+  CHECK (max_users IS NULL OR max_users >= 1);
 
 CREATE INDEX IF NOT EXISTS subscriptions_restaurant_status_idx
   ON subscriptions(restaurant_id, status, expires_at);

@@ -26,6 +26,8 @@ npm install --prefix cloud
 npm run migrate --prefix cloud
 ```
 
+Run this after every cloud update and before restarting the Node service. The current schema includes a per-account `max_users` subscription field. In GI Cloud Admin, leave **User Limit** blank for Unlimited or enter a positive whole number for a limited account. The limit counts active POS users, is shown in the Client Portal, and is enforced when the POS user directory syncs.
+
 5. Start API:
 
 ```powershell

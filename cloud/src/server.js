@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createPool } = require('./db');
+const { enforceUserLimit, parseUserLimit } = require('./user-limits');
 const {
   getPlatformLoginError,
   normalizeAppPlatform,
@@ -895,8 +896,10 @@ async function handleAdminRestaurants(response) {
       s.starts_at,
       s.expires_at,
       s.max_devices,
+      s.max_users,
       COALESCE(ds.active_devices, 0)::int AS active_devices,
-      COALESCE(ds.total_devices, 0)::int AS total_devices
+      COALESCE(ds.total_devices, 0)::int AS total_devices,
+      COALESCE(us.active_users, 1)::int AS active_users
     FROM restaurants r
     LEFT JOIN accounts a ON a.id = r.account_id
     LEFT JOIN LATERAL (
@@ -913,6 +916,17 @@ async function handleAdminRestaurants(response) {
       FROM devices d
       WHERE d.restaurant_id = r.id
     ) ds ON true
+    LEFT JOIN LATERAL (
+      SELECT GREATEST(
+        1,
+        COALESCE(COUNT(*) FILTER (WHERE COALESCE((entry->>'active')::boolean, true)), 0)
+      )::int AS active_users
+      FROM cloud_kv users_kv
+      CROSS JOIN LATERAL jsonb_array_elements(
+        CASE WHEN jsonb_typeof(users_kv.value) = 'array' THEN users_kv.value ELSE '[]'::jsonb END
+      ) entry
+      WHERE users_kv.restaurant_id = r.id AND users_kv.key = '${STAFF_DIRECTORY_KEY}'
+    ) us ON true
     ORDER BY r.created_at DESC
     LIMIT 200
   `);
@@ -943,6 +957,7 @@ async function handleAdminApprove(request, response, restaurantId) {
   const body = await readJson(request);
   const plan = getPlanDefinition(body.planName || 'Premium');
   const maxDevices = plan.maxDevices;
+  const maxUsers = parseUserLimit(body.maxUsers);
   const expiresAt = parseExpiryDate(body.expiresAt, 365);
 
   const client = await pool.connect();
@@ -969,11 +984,11 @@ async function handleAdminApprove(request, response, restaurantId) {
     );
     const subscriptionResult = await client.query(
       `
-        INSERT INTO subscriptions (restaurant_id, plan_name, status, starts_at, expires_at, max_devices)
-        VALUES ($1, $2, 'active', now(), $3, $4)
-        RETURNING id, plan_name, status, starts_at, expires_at, max_devices
+        INSERT INTO subscriptions (restaurant_id, plan_name, status, starts_at, expires_at, max_devices, max_users)
+        VALUES ($1, $2, 'active', now(), $3, $4, $5)
+        RETURNING id, plan_name, status, starts_at, expires_at, max_devices, max_users
       `,
-      [restaurantId, plan.name, expiresAt, maxDevices],
+      [restaurantId, plan.name, expiresAt, maxDevices, maxUsers],
     );
     await client.query(
       `UPDATE devices SET active = false, updated_at = now() WHERE restaurant_id = $1 AND NOT (platform = ANY($2::text[]))`,
@@ -1386,6 +1401,14 @@ async function handleSyncPush(request, response, context) {
 
   try {
     await client.query('BEGIN');
+    const staffDirectoryChange = changes.find((change) =>
+      change?.entityType === 'app_kv' &&
+      change?.operation !== 'delete' &&
+      change?.payload?.key === STAFF_DIRECTORY_KEY
+    );
+    if (staffDirectoryChange) {
+      enforceUserLimit(context.subscription, staffDirectoryChange.payload.value);
+    }
     for (const change of changes) {
       const clientEventId = String(change.id || '').trim();
       const entityType = String(change.entityType || '').trim();
@@ -1589,6 +1612,7 @@ async function getAccountRestaurants(accountId, appPlatform = null) {
         s.starts_at,
         s.expires_at,
         s.max_devices,
+        s.max_users,
         sd.value AS staff_users,
         COALESCE(ds.active_devices, 0)::int AS active_devices,
         COALESCE(ds.total_devices, 0)::int AS total_devices
@@ -1641,6 +1665,7 @@ async function getAccountRestaurants(accountId, appPlatform = null) {
         ...decoratedRestaurant,
         devices: devicesByRestaurant.get(restaurant.id) || [],
         staffUsers: normalizeStaffDirectory(staffUsers),
+        active_users: Math.max(1, normalizeStaffDirectory(staffUsers).filter((user) => user.active).length),
       };
     });
 }
@@ -1657,7 +1682,7 @@ async function getAccountRestaurant(accountId, restaurantId) {
 async function getActiveSubscription(client, restaurantId) {
   const result = await client.query(
     `
-      SELECT id, plan_name, status, starts_at, expires_at, max_devices
+      SELECT id, plan_name, status, starts_at, expires_at, max_devices, max_users
       FROM subscriptions
       WHERE restaurant_id = $1
         AND status IN ('trial', 'active')
@@ -1922,6 +1947,7 @@ function decorateSubscription(subscription) {
     plan_device_limits: plan.deviceLimits,
     plan_capabilities: plan.capabilities,
     max_devices: Number(subscription.max_devices || plan.maxDevices),
+    max_users: subscription.max_users == null ? null : Number(subscription.max_users),
   };
 }
 
@@ -1934,6 +1960,7 @@ function decorateRestaurantPlanFields(restaurant) {
         starts_at: restaurant.starts_at,
         expires_at: restaurant.expires_at,
         max_devices: restaurant.max_devices,
+        max_users: restaurant.max_users,
       })
     : null;
 
@@ -1953,6 +1980,8 @@ function decorateRestaurantPlanFields(restaurant) {
     plan_device_limits: subscription.plan_device_limits,
     plan_capabilities: subscription.plan_capabilities,
     max_devices: subscription.max_devices,
+    max_users: subscription.max_users,
+    active_users: Number(restaurant.active_users || 1),
   };
 }
 
@@ -2734,7 +2763,7 @@ const BASE_STYLES = `
     border-radius: 0;
     background: #f8fafc;
   }
-  .admin-client-card .subscription-edit { grid-template-columns: minmax(130px, 1fr) minmax(120px, .75fr) minmax(150px, .8fr) minmax(126px, auto); }
+  .admin-client-card .subscription-edit { grid-template-columns: minmax(120px, 1fr) 110px 145px 130px minmax(126px, auto); }
   .admin-client-card .subscription-box .row { justify-content: flex-end; }
   .restaurant-title { display: grid; gap: 6px; }
   .restaurant-title strong { font-size: 18px; }
@@ -3245,6 +3274,8 @@ const PORTAL_HTML = `<!doctype html>
         const cardClass = restaurant.status === 'suspended' ? 'suspended' : approved ? '' : 'pending';
         const devices = String(restaurant.active_devices || 0);
         const plan = getPlan(restaurant.plan_name);
+        const activeUsers = Number(restaurant.active_users || 1);
+        const userLimit = restaurant.max_users == null ? 'Unlimited' : String(restaurant.max_users);
         const deviceList = (restaurant.devices || []).map(function (device) {
           const platform = device.platform === 'android' ? 'Android' : 'Windows';
           return esc(device.name) + ' / ' + platform + (device.active ? '' : ' (disabled)');
@@ -3252,8 +3283,8 @@ const PORTAL_HTML = `<!doctype html>
         return '<article class="restaurant-card ' + cardClass + '">' +
           '<div class="restaurant-main">' +
             '<div class="restaurant-title"><strong>' + esc(restaurant.name) + '</strong><small>' + esc(restaurant.id) + '</small><span class="badge ' + badgeClass + '">' + esc(restaurant.status) + '</span></div>' +
-            '<div><span class="eyebrow">Subscription</span><p>' + esc(subscriptionText(restaurant)) + '</p><div class="plan-meta"><span class="badge ' + (canPair ? 'good' : 'warn') + '">' + (canPair ? 'App activation ready' : 'Approval required') + '</span><span class="badge">' + esc(plan ? plan.counterLabel : 'Plan pending') + '</span><span class="badge">' + esc(plan ? (plan.platforms || []).map(function (platform) { return platform === 'android' ? 'Android' : 'Windows'; }).join(' + ') : 'Platform pending') + '</span><span class="badge ' + (plan && plan.localPos ? 'good' : 'warn') + '">' + (plan && plan.localPos ? 'Local POS included' : 'Local POS not included') + '</span></div></div>' +
-            '<div><span class="eyebrow">Devices</span><p>' + esc(devices) + ' active</p><div class="device-list">' + (deviceList || 'No devices connected') + '</div></div>' +
+            '<div><span class="eyebrow">Plan & Access</span><p>' + esc(subscriptionText(restaurant)) + '</p><div class="plan-meta"><span class="badge good">' + activeUsers + ' / ' + esc(userLimit) + ' users</span><span class="badge ' + (canPair ? 'good' : 'warn') + '">' + (canPair ? 'Activation ready' : 'Approval required') + '</span><span class="badge">' + esc(plan ? plan.counterLabel : 'Plan pending') + '</span></div></div>' +
+            '<div><span class="eyebrow">Connected Devices</span><p>' + esc(devices) + ' active</p><div class="device-list">' + (deviceList || 'No devices connected') + '</div></div>' +
           '</div>' +
         '</article>';
       }).join('');
@@ -3615,7 +3646,7 @@ const ADMIN_HTML = `<!doctype html>
           <div>
             <span class="eyebrow">Clients</span>
             <h2>Restaurants</h2>
-            <p>Search, filter, approve, renew, reset portal password, or suspend.</p>
+            <p>Manage plan, expiry, user capacity, access, and renewal from one client record.</p>
           </div>
           <div class="admin-client-tools">
             <label>Search Client <input id="clientSearch" placeholder="Business, owner, phone, email"></label>
@@ -3929,6 +3960,9 @@ const ADMIN_HTML = `<!doctype html>
         const planValue = restaurant.plan_name || 'Premium';
         const expiryValue = dateInputValue(restaurant.expires_at);
         const selectedPlan = getPlan(planValue);
+        const userLimit = restaurant.max_users == null ? '' : String(restaurant.max_users);
+        const userUsage = Number(restaurant.active_users || 1);
+        const userCapacityText = userLimit ? userUsage + ' / ' + userLimit + ' users' : userUsage + ' / Unlimited users';
         const deviceList = (restaurant.devices || []).slice(0, 4).map(function (device) {
           const platform = device.platform === 'android' ? 'Android' : 'Windows';
           return esc(device.name) + ' / ' + platform + ' - ' + (device.active ? 'active' : 'disabled') + (device.last_seen_at ? ' / ' + esc(formatDate(device.last_seen_at)) : '');
@@ -3945,12 +3979,13 @@ const ADMIN_HTML = `<!doctype html>
               '<div><span class="eyebrow">Devices</span><p>' + esc(devices) + ' active</p><div class="device-list">' + (deviceList || 'No device connected yet') + '</div></div>' +
             '</div>' +
             '<div class="subscription-box">' +
-              '<div class="toolbar"><div><span class="eyebrow">Subscription</span><p>' + esc(subscriptionText(restaurant)) + '</p></div><span class="badge ' + subscription.className + '">' + esc(subscription.label) + '</span></div>' +
-              '<div class="plan-meta"><span class="badge">' + esc(selectedPlan.counterLabel) + '</span><span class="badge">' + esc((selectedPlan.platforms || []).map(function (platform) { return platform === 'android' ? 'Android' : 'Windows'; }).join(' + ')) + '</span><span class="badge ' + (selectedPlan.localPos ? 'good' : 'warn') + '">' + (selectedPlan.localPos ? 'Local POS included' : 'Local POS not included') + '</span></div>' +
+              '<div class="toolbar"><div><span class="eyebrow">Plan & Access</span><p>' + esc(subscriptionText(restaurant)) + '</p></div><span class="badge ' + subscription.className + '">' + esc(subscription.label) + '</span></div>' +
+              '<div class="plan-meta"><span class="badge good">' + esc(userCapacityText) + '</span><span class="badge">' + esc(selectedPlan.counterLabel) + '</span><span class="badge">' + esc((selectedPlan.platforms || []).map(function (platform) { return platform === 'android' ? 'Android' : 'Windows'; }).join(' + ')) + '</span></div>' +
               '<div class="subscription-edit">' +
                 '<label>Plan <select data-plan-input>' + planOptionsHtml(planValue) + '</select></label>' +
                 '<label>Period <select data-duration-input><option value="1">1 Year</option><option value="2">2 Years</option><option value="3">3 Years</option><option value="custom" selected>Custom</option></select></label>' +
                 '<label>Expiry <input data-expiry-input type="date" value="' + esc(expiryValue) + '"></label>' +
+                '<label>User Limit <input data-user-limit-input type="number" min="1" max="10000" value="' + esc(userLimit) + '" placeholder="Unlimited"></label>' +
                 '<button class="primary" data-approve="' + esc(restaurant.id) + '">' + (approved ? 'Renew / Update' : 'Approve') + '</button>' +
               '</div>' +
               '<div class="row">' +
@@ -3967,7 +4002,8 @@ const ADMIN_HTML = `<!doctype html>
           const card = button.closest('.restaurant-card');
           const planInput = card ? card.querySelector('[data-plan-input]') : null;
           const expiryInput = card ? card.querySelector('[data-expiry-input]') : null;
-          approve(button.getAttribute('data-approve'), planInput && planInput.value, expiryInput && expiryInput.value);
+          const userLimitInput = card ? card.querySelector('[data-user-limit-input]') : null;
+          approve(button.getAttribute('data-approve'), planInput && planInput.value, expiryInput && expiryInput.value, userLimitInput && userLimitInput.value);
         });
       });
       document.querySelectorAll('[data-duration-input]').forEach(function (select) {
@@ -3993,13 +4029,14 @@ const ADMIN_HTML = `<!doctype html>
       setStatus('Loaded ' + (result.restaurants || []).length + ' restaurant(s).', 'ok');
       await loadUpdateInfo();
     }
-    async function approve(id, planName, expiresAt) {
+    async function approve(id, planName, expiresAt, maxUsers) {
       setStatus('Approving restaurant...', '');
       await api('/api/v1/admin/restaurants/' + encodeURIComponent(id) + '/approve', {
         method: 'POST',
         body: JSON.stringify({
           planName: planName || 'Premium',
-          expiresAt: expiresAt || defaultExpiryValue()
+          expiresAt: expiresAt || defaultExpiryValue(),
+          maxUsers: maxUsers || null
         })
       });
       await load();
@@ -4053,6 +4090,7 @@ async function ensureRuntimeSchema() {
     ALTER TABLE accounts ADD COLUMN IF NOT EXISTS recovery_code_hash TEXT NOT NULL DEFAULT '';
     ALTER TABLE accounts ADD COLUMN IF NOT EXISTS recovery_code_set_at TIMESTAMPTZ;
     ALTER TABLE subscriptions ALTER COLUMN max_devices SET DEFAULT 999999;
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS max_users INTEGER;
     ALTER TABLE devices ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'windows';
     ALTER TABLE pairing_codes ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'windows';
     CREATE INDEX IF NOT EXISTS devices_restaurant_platform_idx ON devices(restaurant_id, platform, active);
