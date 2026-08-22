@@ -1118,6 +1118,7 @@ function buildReceiptHtml(payload) {
     business.address,
     business.phone ? `Phone: ${business.phone}` : '',
     business.gstin ? `GSTIN: ${business.gstin}` : '',
+    business.fssai ? `FSSAI: ${business.fssai}` : '',
   ]
     .filter(Boolean)
     .map((lineText) => `<div class="muted">${escapeHtml(lineText)}</div>`)
@@ -1131,13 +1132,30 @@ function buildReceiptHtml(payload) {
   const now = new Date(order.createdAt || Date.now());
   const staffName = order.serviceStaffName || order.cashier || 'Admin';
   const totalQuantity = (order.items || []).reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  const taxableSubtotal = Number(order.taxableSubtotal ?? Math.max(0, Number(order.subtotal || 0) - Number(order.tax || 0)));
+  const roundOff = Number(order.roundOff || 0);
+  const taxBreakdown = buildReceiptTaxBreakdown(order);
+  const taxRows = taxBreakdown.length
+    ? taxBreakdown
+        .map((row) => {
+          const rateText = row.rate > 0 ? ` @${formatRate(row.rate)}%` : '';
+          const halfRateText = row.rate > 0 ? ` @${formatRate(row.rate / 2)}%` : '';
+          return `
+            <tr><td>GST${rateText}</td><td>${money(row.amount)}</td></tr>
+            <tr><td>CGST${halfRateText}</td><td>${money(row.amount / 2)}</td></tr>
+            <tr><td>SGST${halfRateText}</td><td>${money(row.amount / 2)}</td></tr>
+          `;
+        })
+        .join('')
+    : '';
   const itemRows = order.items
     .map(
       (item) => `
         <tr>
           <td>${escapeHtml(item.name)}</td>
           <td class="qty">${formatQty(item.qty)}</td>
-          <td class="amount">${money(item.total)}</td>
+          <td class="price">${compactMoney(item.price)}</td>
+          <td class="amount">${compactMoney(item.total)}</td>
         </tr>
       `,
     )
@@ -1181,12 +1199,18 @@ function buildReceiptHtml(payload) {
           .totals td:last-child { width: 54%; text-align: right; white-space: nowrap; padding-left: 3px; }
           table.items { width: 100%; border-collapse: collapse; table-layout: fixed; }
           .items td { padding: 4px 0; vertical-align: top; }
-          .items td:first-child { width: 57%; padding-right: 2px; overflow-wrap: anywhere; }
-          .items td.qty { width: 16%; text-align: center; white-space: nowrap; }
-          .items td.amount { width: 27%; text-align: right; white-space: nowrap; padding-left: 2px; }
+          .items td:first-child { width: 42%; padding-right: 2px; overflow-wrap: anywhere; }
+          .items td.qty { width: 13%; text-align: center; white-space: nowrap; }
+          .items td.price { width: 20%; text-align: right; white-space: nowrap; padding-left: 2px; overflow: hidden; font-size: ${paperWidth === 58 ? 8 : 11}px; }
+          .items td.amount { width: 25%; text-align: right; white-space: nowrap; padding-left: 2px; overflow: hidden; font-size: ${paperWidth === 58 ? 8 : 11}px; }
           .items-head td { font-weight: 900; padding: 1px 0 3px; border-bottom: 1px solid #000; }
           .items-head td.qty { text-align: center; }
+          .items-head td.price { text-align: right; }
           .items-head td.amount { text-align: right; }
+          .total-qty td { padding-top: 5px; font-weight: 400; }
+          .subtotal-row td { padding-top: 6px; }
+          .subtotal-label strong { display: block; font-size: ${paperWidth === 58 ? 10 : 12}px; }
+          .subtotal-label small { display: block; font-size: ${paperWidth === 58 ? 7 : 9}px; font-weight: 600; }
           .grand td { font-size: ${paperWidth === 58 ? 16 : 20}px; font-weight: 900; border-top: 2px solid #000; padding-top: 7px; }
           .thanks { margin-top: 10px; font-weight: 700; }
         </style>
@@ -1202,6 +1226,7 @@ function buildReceiptHtml(payload) {
           <div class="meta-block">
             <div class="meta-row"><span>Bill</span><span>${escapeHtml(order.billNo)}</span></div>
             <div class="meta-row kot-no"><span>KOT</span><span>${escapeHtml(order.kotNo || '')}</span></div>
+            <div class="meta-row"><span>Payment</span><span>${escapeHtml(order.paymentMethod || 'Cash')}</span></div>
             ${order.customer ? `<div class="meta-row"><span>Name</span><span>${escapeHtml(order.customer)}</span></div>` : ''}
           </div>
           <div class="meta-block right">
@@ -1211,17 +1236,13 @@ function buildReceiptHtml(payload) {
           </div>
         </div>
         <div class="rule"></div>
-        <table class="items"><tr class="items-head"><td>Item</td><td class="qty">Qty</td><td class="amount">Amount</td></tr>${itemRows}</table>
-        <table class="totals"><tr><td>Total Qty</td><td>${formatQty(totalQuantity)}</td></tr></table>
-        <div class="rule"></div>
+        <table class="items"><tr class="items-head"><td>Item</td><td class="qty">Qty</td><td class="price">Price</td><td class="amount">Amount</td></tr>${itemRows}<tr class="total-qty"><td>Total Qty</td><td class="qty">${formatQty(totalQuantity)}</td><td class="price"></td><td class="amount"></td></tr></table>
         <table class="totals">
-          <tr><td>Subtotal</td><td>${money(order.subtotal)}</td></tr>
+          <tr class="subtotal-row"><td class="subtotal-label"><strong>Subtotal</strong><small>Excl. GST</small></td><td>${money(taxableSubtotal)}</td></tr>
           ${order.discount > 0 ? `<tr><td>Discount</td><td>-${money(order.discount)}</td></tr>` : ''}
-          ${order.tax > 0 ? `
-            <tr><td>CGST</td><td>${money(order.tax / 2)}</td></tr>
-            <tr><td>SGST</td><td>${money(order.tax / 2)}</td></tr>
-          ` : ''}
+          ${taxRows}
           ${order.serviceCharge > 0 ? `<tr><td>Service Charge</td><td>${money(order.serviceCharge)}</td></tr>` : ''}
+          ${roundOff !== 0 ? `<tr><td>Round Off</td><td>${roundOff > 0 ? '+' : ''}${money(roundOff)}</td></tr>` : ''}
           <tr class="grand"><td>Total</td><td>${money(order.total)}</td></tr>
         </table>
         <div class="rule"></div>
@@ -1430,12 +1451,16 @@ function buildEscPosReceipt(payload) {
     business.address,
     business.phone ? `Phone: ${business.phone}` : '',
     business.gstin ? `GSTIN: ${business.gstin}` : '',
+    business.fssai ? `FSSAI: ${business.fssai}` : '',
   ].filter(Boolean);
   const footerNote = business.footerNote || 'Thank you. Visit again.';
   const columns = getEscPosColumns(payload?.settings);
   const parts = [];
   const staffName = order.serviceStaffName || order.cashier || 'Admin';
   const totalQuantity = (order.items || []).reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  const taxableSubtotal = Number(order.taxableSubtotal ?? Math.max(0, Number(order.subtotal || 0) - Number(order.tax || 0)));
+  const roundOff = Number(order.roundOff || 0);
+  const taxBreakdown = buildReceiptTaxBreakdown(order);
 
   push(parts, [0x1b, 0x40]);
   align(parts, 1);
@@ -1451,6 +1476,7 @@ function buildEscPosReceipt(payload) {
   bold(parts, true);
   text(parts, twoCol('KOT', order.kotNo || '', columns));
   bold(parts, false);
+  text(parts, twoCol('Payment', order.paymentMethod || 'Cash', columns));
   text(parts, twoCol('Date', formatDateTime(new Date(order.createdAt || Date.now())), columns));
   text(parts, twoCol('Order', `${order.orderType}${order.table ? ` / ${order.table}` : ''}`, columns));
   if (order.customer) {
@@ -1460,28 +1486,35 @@ function buildEscPosReceipt(payload) {
   text(parts, solidLine(columns));
 
   bold(parts, true);
-  text(parts, twoCol('Item', 'Qty Amount', columns));
+  text(parts, receiptItemRow('Item', 'Qty', 'Price', 'Amount', columns));
   bold(parts, false);
 
   for (const item of order.items) {
-    for (const wrapped of wrapText(item.name, columns - 14)) {
-      text(parts, wrapped + '\n');
+    const itemWidth = columns <= 28 ? 9 : 15;
+    const itemNameLines = wrapText(item.name, itemWidth);
+    text(parts, receiptItemRow(itemNameLines[0], formatQty(item.qty), compactMoney(item.price), compactMoney(item.total), columns));
+    for (const wrapped of itemNameLines.slice(1)) {
+      text(parts, `${wrapped}\n`);
     }
-    text(parts, twoCol(`${formatQty(item.qty)} x ${money(item.price)}`, money(item.total), columns));
   }
 
-  text(parts, twoCol('Total Qty', formatQty(totalQuantity), columns));
-  text(parts, solidLine(columns));
-  text(parts, twoCol('Subtotal', money(order.subtotal), columns));
+  text(parts, receiptItemRow('Total Qty', formatQty(totalQuantity), '', '', columns));
+  text(parts, twoCol('Subtotal', money(taxableSubtotal), columns));
   if (order.discount > 0) {
     text(parts, twoCol('Discount', `-${money(order.discount)}`, columns));
   }
-  if (order.tax > 0) {
-    text(parts, twoCol('CGST', money(order.tax / 2), columns));
-    text(parts, twoCol('SGST', money(order.tax / 2), columns));
+  for (const row of taxBreakdown) {
+    const rateText = row.rate > 0 ? ` @${formatRate(row.rate)}%` : '';
+    const halfRateText = row.rate > 0 ? ` @${formatRate(row.rate / 2)}%` : '';
+    text(parts, twoCol(`GST${rateText}`, money(row.amount), columns));
+    text(parts, twoCol(`CGST${halfRateText}`, money(row.amount / 2), columns));
+    text(parts, twoCol(`SGST${halfRateText}`, money(row.amount / 2), columns));
   }
   if (order.serviceCharge > 0) {
     text(parts, twoCol('Service Charge', money(order.serviceCharge), columns));
+  }
+  if (roundOff !== 0) {
+    text(parts, twoCol('Round Off', `${roundOff > 0 ? '+' : ''}${money(roundOff)}`, columns));
   }
   text(parts, solidLine(columns));
   bold(parts, true);
@@ -1709,6 +1742,63 @@ function twoCol(left, right, columns) {
   const width = Math.max(1, columns - safeRight.length);
   const trimmedLeft = safeLeft.length > width ? safeLeft.slice(0, width - 1) : safeLeft;
   return `${trimmedLeft}${' '.repeat(Math.max(1, columns - trimmedLeft.length - safeRight.length))}${safeRight}\n`;
+}
+
+function buildReceiptTaxBreakdown(order = {}) {
+  const items = Array.isArray(order.items) ? order.items : [];
+  const gstType = order.gstType === 'inclusive' ? 'inclusive' : 'exclusive';
+  const rowsByRate = new Map();
+
+  for (const item of items) {
+    const rate = Math.max(0, Number(item.taxRate || 0));
+    if (!rate) continue;
+
+    const lineTotal = Number(item.total || 0);
+    const amount = gstType === 'inclusive' ? (lineTotal * rate) / (100 + rate) : (lineTotal * rate) / 100;
+    rowsByRate.set(rate, (rowsByRate.get(rate) || 0) + amount);
+  }
+
+  const rows = [...rowsByRate.entries()]
+    .map(([rate, amount]) => ({ rate, amount: roundReceiptMoney(amount) }))
+    .filter((row) => row.amount > 0)
+    .sort((a, b) => a.rate - b.rate);
+
+  const savedTax = roundReceiptMoney(order.tax || 0);
+  if (!savedTax) return [];
+  if (!rows.length) return [{ rate: 0, amount: savedTax }];
+
+  const calculatedTax = roundReceiptMoney(rows.reduce((sum, row) => sum + row.amount, 0));
+  const difference = roundReceiptMoney(savedTax - calculatedTax);
+  if (difference !== 0) {
+    rows[rows.length - 1].amount = roundReceiptMoney(rows[rows.length - 1].amount + difference);
+  }
+
+  return rows.filter((row) => row.amount > 0);
+}
+
+function roundReceiptMoney(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function formatRate(value) {
+  const rounded = Math.round(Number(value || 0) * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function receiptItemRow(item, qty, price, amount, columns) {
+  const widths = columns <= 28 ? [9, 3, 7, 9] : [15, 4, 9, 12];
+  const values = [item, qty, price, amount].map((value) => ascii(value));
+  return values
+    .map((value, index) => {
+      const width = widths[index];
+      const clipped = value.slice(0, width);
+      return index === 0 ? clipped.padEnd(width) : clipped.padStart(width);
+    })
+    .join('') + '\n';
+}
+
+function compactMoney(value) {
+  return Number(value || 0).toFixed(2);
 }
 
 function wrapText(value, width) {

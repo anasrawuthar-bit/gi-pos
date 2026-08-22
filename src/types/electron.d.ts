@@ -78,6 +78,14 @@ export type LocalServerStatus = {
   startedAt: string
   error: string
   dbPath: string
+  discovery: {
+    enabled: boolean
+    name: string
+    hostName: string
+    serviceType: string
+    state: 'advertising' | 'disabled' | 'unavailable'
+    error: string
+  }
 }
 
 export type FoodImageSearchResult = {
@@ -125,6 +133,7 @@ declare global {
     }
     posServer?: {
       getStatus: () => Promise<LocalServerStatus>
+      configureDiscovery: (settings: { enabled: boolean; name: string; hostName?: string }) => Promise<LocalServerStatus>
       stop: () => Promise<{ ok: boolean }>
     }
     posImages?: {

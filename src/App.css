@@ -856,10 +856,10 @@ button {
 
 .bill-adjustment-summary {
   display: grid;
-  gap: 4px;
+  gap: 3px;
   align-content: center;
   min-height: 38px;
-  padding: 6px 8px;
+  padding: 7px 9px;
   color: #4b5563;
   background: #f8fafc;
   border: 1px solid #d7dce3;
@@ -875,6 +875,60 @@ button {
 
 .bill-adjustment-row strong {
   color: #111827;
+}
+
+.bill-adjustment-row span small {
+  color: #94a3b8;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.bill-adjustment-row.subtotal-row {
+  margin-bottom: 2px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #d7dce3;
+}
+
+.bill-adjustment-row.gst-total-row {
+  color: #0f766e;
+  font-weight: 800;
+}
+
+.round-off-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 3px;
+  border-top: 1px solid #d7dce3;
+}
+
+.round-off-control {
+  display: grid;
+  grid-template-columns: 58px 24px;
+  gap: 3px;
+}
+
+.round-off-control input {
+  width: 58px;
+  height: 25px;
+  padding: 0 5px;
+  text-align: right;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  font: inherit;
+  font-weight: 800;
+}
+
+.round-off-control button {
+  width: 24px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+  color: #0f766e;
+  background: #ecfeff;
+  border: 1px solid #a5f3fc;
+  border-radius: 4px;
 }
 
 .bill-adjustment-row.discount,
@@ -8867,6 +8921,32 @@ button {
   background: color-mix(in srgb, var(--surface-2) 82%, var(--surface));
   border: 1px solid var(--border);
   border-radius: 7px;
+}
+
+.pos-shell .network-card-copy {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.pos-shell .local-discovery-toggle {
+  margin: 0;
+}
+
+.pos-shell .local-discovery-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pos-shell .local-discovery-fields label {
+  min-width: 0;
+}
+
+.pos-shell .local-discovery-fields input {
+  width: 100%;
 }
 
 .pos-shell .order-alert-count {

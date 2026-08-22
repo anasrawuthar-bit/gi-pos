@@ -10,11 +10,14 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.text.InputType;
+import android.text.method.PasswordTransformationMethod;
 
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -49,11 +52,25 @@ public class SettingsActivity extends InsetActivity {
 
     root.addView(text("Business operations",14,muted,true),top(22));
     root.addView(action("Business & billing","Receipt details and payment methods",BusinessSettingsActivity.class),top(9));
-    root.addView(action("Ordering layout","Menu browsing and items per row",OrderingSettingsActivity.class),top(9));
     root.addView(action("Menu management","Categories, products, variants, GST and availability",MenuActivity.class),top(9));
     root.addView(tableLayoutAction(),top(9));
     root.addView(action("Customer directory","Customer profiles, bills and dues",CustomerActivity.class),top(9));
     root.addView(action("Printer setup","Bluetooth/network printers and POS58/POS80",PrinterActivity.class),top(9));
+
+    LinearLayout localServer=panel("Local Main PC");
+    localServer.addView(text("Find the desktop POS by its saved connection name. Discovery follows the PC even when its Wi-Fi IP changes.",13,muted,false),top(6));
+    localServer.addView(pair("Connection name",SecureStore.localServerName(this)),top(13));
+    localServer.addView(pair("Last endpoint",SecureStore.localServerEndpoint(this).isBlank()?"Not discovered":SecureStore.localServerEndpoint(this)),top(9));
+    LinearLayout localActions=row();
+    Button findServer=button("Find Main PC",Color.rgb(229,247,249),teal);
+    findServer.setOnClickListener(v->findLocalServer(findServer));
+    localActions.addView(findServer,new LinearLayout.LayoutParams(0,dp(46),1));
+    localActions.addView(gap());
+    Button renameServer=button("Change name",Color.WHITE,ink);
+    renameServer.setOnClickListener(v->showLocalServerNameEditor());
+    localActions.addView(renameServer,new LinearLayout.LayoutParams(0,dp(46),1));
+    localServer.addView(localActions,top(13));
+    root.addView(localServer,top(18));
 
     LinearLayout license=panel("License & account");
     license.addView(pair("Business",session==null?"Not activated":session.businessName));
@@ -63,6 +80,18 @@ public class SettingsActivity extends InsetActivity {
     license.addView(pair("Expires",session==null?"-":date(session.expiresAt)),top(9));
     license.addView(pair("Pending sync",String.valueOf(db.pendingSyncCount())),top(9));
     root.addView(license,top(20));
+
+    LinearLayout security=panel("Optional app PIN");
+    boolean pinEnabled=SecureStore.hasPin(this);
+    security.addView(text(pinEnabled?"PIN protection is enabled":"PIN protection is off",14,pinEnabled?teal:ink,true),top(6));
+    security.addView(text("When enabled, the PIN unlocks this phone after a fresh app launch. Your account password is still used for activation.",13,muted,false),top(6));
+    LinearLayout pinActions=row();
+    Button configurePin=button(pinEnabled?"Change PIN":"Set PIN",Color.rgb(229,247,249),teal);
+    configurePin.setOnClickListener(v->showPinEditor(pinEnabled));
+    pinActions.addView(configurePin,new LinearLayout.LayoutParams(0,dp(46),1));
+    if(pinEnabled){pinActions.addView(gap());Button removePin=button("Remove PIN",Color.rgb(255,241,243),red);removePin.setOnClickListener(v->showRemovePin());pinActions.addView(removePin,new LinearLayout.LayoutParams(0,dp(46),1));}
+    security.addView(pinActions,top(13));
+    root.addView(security,top(18));
 
     LinearLayout data=panel("Data safety");
     data.addView(text("Create a manual SQLite backup before major menu or device changes. Restoring replaces the current local data.",13,muted,false),top(6));
@@ -102,6 +131,36 @@ public class SettingsActivity extends InsetActivity {
       .show();
   }
 
+  private void findLocalServer(Button button){
+    button.setEnabled(false);
+    button.setText("Searching...");
+    LocalServerDiscovery.find(this,SecureStore.localServerName(this),new LocalServerDiscovery.Callback(){
+      @Override public void onFound(String name,String endpoint){
+        if(isFinishing())return;
+        SecureStore.saveLocalServer(SettingsActivity.this,name,endpoint);
+        Toast.makeText(SettingsActivity.this,"Main PC found",Toast.LENGTH_SHORT).show();
+        render();
+      }
+      @Override public void onError(String message){
+        if(isFinishing())return;
+        button.setEnabled(true);
+        button.setText("Find Main PC");
+        Toast.makeText(SettingsActivity.this,message,Toast.LENGTH_LONG).show();
+      }
+    });
+  }
+
+  private void showLocalServerNameEditor(){
+    EditText name=FormControls.input(this,"GI POS Main PC",InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+    name.setText(SecureStore.localServerName(this));
+    name.setSelection(name.getText().length());
+    LinearLayout form=FormControls.dialogForm(this);
+    form.addView(FormControls.field(this,"Connection name",name));
+    AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Main PC connection name").setMessage("Enter the same name configured on the desktop Local POS Server page.").setView(form).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();
+    dialog.setOnShowListener(v->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(button->{String value=name.getText().toString().trim();if(value.isBlank()){name.setError("Enter a connection name");name.requestFocus();return;}SecureStore.setLocalServerName(this,value);dialog.dismiss();render();}));
+    dialog.show();
+  }
+
   private void logout(){
     SecureStore.signOut(this);
     Intent intent=new Intent(this,MainActivity.class);
@@ -109,6 +168,32 @@ public class SettingsActivity extends InsetActivity {
     startActivity(intent);
     finish();
   }
+
+  private void showPinEditor(boolean changing){
+    LinearLayout form=FormControls.dialogForm(this);
+    EditText current=pinInput("Enter current PIN"),next=pinInput("Enter new PIN"),confirm=pinInput("Repeat new PIN");
+    if(changing)form.addView(FormControls.field(this,"Current PIN",current));
+    form.addView(FormControls.field(this,"New PIN",next),changing?top(13):new LinearLayout.LayoutParams(-1,-2));
+    form.addView(FormControls.field(this,"Confirm PIN",confirm),top(13));
+    AlertDialog dialog=new AlertDialog.Builder(this).setTitle(changing?"Change optional PIN":"Set optional PIN").setView(form).setNegativeButton("Cancel",null).setPositiveButton("Save",null).create();
+    dialog.setOnShowListener(v->{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(button->{
+      String newPin=next.getText().toString(),confirmation=confirm.getText().toString();
+      if(changing&&!SecureStore.verifyPin(this,current.getText().toString())){current.setError("Current PIN is incorrect");current.requestFocus();return;}
+      if(!newPin.matches("\\d{4,8}")){next.setError("Use 4 to 8 digits");next.requestFocus();return;}
+      if(!newPin.equals(confirmation)){confirm.setError("PINs do not match");confirm.requestFocus();return;}
+      try{SecureStore.setPin(this,newPin);Toast.makeText(this,"Optional PIN enabled",Toast.LENGTH_SHORT).show();dialog.dismiss();render();}catch(Exception error){Toast.makeText(this,"Could not save PIN",Toast.LENGTH_LONG).show();}
+    });FormControls.submitOnDone(confirm,()->dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick());});
+    dialog.show();
+  }
+
+  private void showRemovePin(){
+    EditText current=pinInput("Enter current PIN");LinearLayout form=FormControls.dialogForm(this);form.addView(FormControls.field(this,"Current PIN",current));
+    AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Remove optional PIN?").setMessage("The app will open directly while this account remains activated.").setView(form).setNegativeButton("Cancel",null).setPositiveButton("Remove",null).create();
+    dialog.setOnShowListener(v->{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(button->{if(!SecureStore.verifyPin(this,current.getText().toString())){current.setError("Current PIN is incorrect");current.requestFocus();return;}SecureStore.clearPin(this);Toast.makeText(this,"Optional PIN removed",Toast.LENGTH_SHORT).show();dialog.dismiss();render();});FormControls.submitOnDone(current,()->dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick());});
+    dialog.show();
+  }
+
+  private EditText pinInput(String hint){EditText value=FormControls.input(this,hint,InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_VARIATION_PASSWORD);value.setTransformationMethod(PasswordTransformationMethod.getInstance());return value;}
 
   private View action(String title,String detail,Class<?> target){
     LinearLayout card=row();
@@ -144,6 +229,7 @@ public class SettingsActivity extends InsetActivity {
   private Button button(String value,int fill,int color){Button view=new Button(this);view.setText(value);view.setAllCaps(false);view.setTextColor(color);view.setTypeface(Typeface.DEFAULT_BOLD);view.setBackground(shape(fill,9,1,line));return view;}
   private GradientDrawable shape(int fill,int radius,int stroke,int strokeColor){GradientDrawable value=new GradientDrawable();value.setColor(fill);value.setCornerRadius(dp(radius));if(stroke>0)value.setStroke(dp(stroke),strokeColor);return value;}
   private LinearLayout.LayoutParams top(int margin){LinearLayout.LayoutParams value=new LinearLayout.LayoutParams(-1,-2);value.topMargin=dp(margin);return value;}
+  private LinearLayout.LayoutParams topHeight(int margin,int height){LinearLayout.LayoutParams value=new LinearLayout.LayoutParams(-1,dp(height));value.topMargin=dp(margin);return value;}
   private View gap(){View value=new View(this);value.setLayoutParams(new LinearLayout.LayoutParams(dp(8),1));return value;}
   private int dp(int value){return(int)(value*getResources().getDisplayMetrics().density);}
 }

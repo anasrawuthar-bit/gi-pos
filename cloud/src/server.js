@@ -15,6 +15,7 @@ const ADMIN_TOKEN = process.env.GI_CLOUD_ADMIN_TOKEN || '';
 const CLIENT_TOKEN_SECRET = process.env.GI_CLIENT_TOKEN_SECRET || ADMIN_TOKEN || 'gi-pos-local-client-secret';
 const OFFLINE_LICENSE_SECRET = process.env.GI_OFFLINE_LICENSE_SECRET || ADMIN_TOKEN || 'gi-pos-local-offline-secret';
 const UPDATE_DIR = process.env.GI_UPDATE_DIR || path.join(__dirname, '..', 'updates', 'win');
+const ANDROID_UPDATE_DIR = process.env.GI_ANDROID_UPDATE_DIR || path.join(__dirname, '..', 'updates', 'android');
 const DEFAULT_PAIRING_MINUTES = 30;
 const UNLIMITED_DEVICE_LIMIT = 999999;
 const CLIENT_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
@@ -169,6 +170,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/download/windows') {
       await serveWindowsDownload(response);
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/download/android') {
+      await serveAndroidDownload(response);
       return;
     }
 
@@ -2148,6 +2154,10 @@ function getPublicConfig(request) {
       updateUrl: `${baseUrl}/updates/win`,
       downloadWindows: `${baseUrl}/download/windows`,
     },
+    android: {
+      cloudUrl: baseUrl,
+      downloadApk: `${baseUrl}/download/android`,
+    },
     endpoints: {
       health: `${baseUrl}/health`,
       connect: `${baseUrl}/connect`,
@@ -2155,6 +2165,7 @@ function getPublicConfig(request) {
       portal: `${baseUrl}/portal`,
       admin: `${baseUrl}/admin`,
       downloadWindows: `${baseUrl}/download/windows`,
+      downloadAndroid: `${baseUrl}/download/android`,
       latestYml: `${baseUrl}/updates/win/latest.yml`,
     },
     updates: {
@@ -2245,6 +2256,39 @@ async function serveWindowsDownload(response) {
     'content-type': 'application/vnd.microsoft.portable-executable',
   });
   fs.createReadStream(downloadFile.path).pipe(response);
+}
+
+async function serveAndroidDownload(response) {
+  const downloadFile = findLatestAndroidApk();
+
+  if (!downloadFile) {
+    sendJson(response, 404, {
+      ok: false,
+      error: 'Android APK not found. Copy the latest APK to cloud/updates/android or GI_ANDROID_UPDATE_DIR.',
+    });
+    return;
+  }
+
+  const stat = fs.statSync(downloadFile.path);
+  response.writeHead(200, {
+    'cache-control': 'no-store',
+    'content-disposition': `attachment; filename="${downloadFile.name.replace(/"/g, '')}"`,
+    'content-length': stat.size,
+    'content-type': 'application/vnd.android.package-archive',
+  });
+  fs.createReadStream(downloadFile.path).pipe(response);
+}
+
+function findLatestAndroidApk() {
+  if (!fs.existsSync(ANDROID_UPDATE_DIR)) return null;
+  const files = fs.readdirSync(ANDROID_UPDATE_DIR)
+    .filter((fileName) => /\.apk$/i.test(fileName))
+    .map((fileName) => {
+      const filePath = path.join(ANDROID_UPDATE_DIR, fileName);
+      return { name: fileName, path: filePath, updatedAt: fs.statSync(filePath).mtimeMs };
+    })
+    .sort((first, second) => second.updatedAt - first.updatedAt);
+  return files[0] || null;
 }
 
 function findLatestWindowsSetupFile() {
@@ -3038,16 +3082,17 @@ const PORTAL_HTML = `<!doctype html>
       <section class="card panel" id="downloadCard" style="display:none">
         <div class="section-head">
           <div>
-            <span class="eyebrow">Windows App</span>
-            <h2>Download Windows App</h2>
-            <p>Download and install the latest GI POS Restaurant desktop app for Windows.</p>
+            <span class="eyebrow">POS Applications</span>
+            <h2>Download GI POS</h2>
+            <p>Install the application that matches the active Windows or Android plan.</p>
           </div>
         </div>
         <div class="row">
           <a class="button primary" href="/download/windows">Download Setup</a>
+          <a class="button" href="/download/android">Download Android APK</a>
           <a class="button" href="/updates/win/latest.yml" target="_blank" rel="noreferrer">Version Info</a>
         </div>
-        <div class="status">Install the setup file, then connect from the desktop app with this cloud account login.</div>
+        <div class="status">Use the same approved client account to activate the compatible app. Android plans cannot activate Windows, and Windows plans cannot activate Android.</div>
       </section>
 
       <section class="card panel" id="securityCard" style="display:none">

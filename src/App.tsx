@@ -59,6 +59,11 @@ type PartTenderMethod = 'upi' | 'card'
 type ConfigurablePaymentMethod = Exclude<PaymentMethod, 'Cash'>
 type ThemeMode = 'light' | 'dark'
 type AppMode = 'cloud' | 'offline'
+type LanDiscoverySettings = {
+  enabled: boolean
+  name: string
+  hostName: string
+}
 type AppView =
   | 'home'
   | 'pos'
@@ -201,9 +206,11 @@ type LineEditor = {
 
 type OrderTotals = {
   subtotal: number
+  taxableSubtotal?: number
   discount: number
   tax: number
   serviceCharge: number
+  roundOff?: number
   total: number
   paid: number
   balance: number
@@ -384,6 +391,7 @@ type BusinessProfile = {
   email: string
   address: string
   gstin: string
+  fssai: string
   receiptFooter: string
   logoDataUrl: string
   defaultGstRate: number
@@ -543,6 +551,7 @@ type StaffUser = {
   recoveryHash?: string
   recoveryCodeSetAt?: string
   permissions: StaffPermission[]
+  deviceAccess?: 'windows' | 'mobile' | 'both'
   active: boolean
   createdAt: string
   updatedAt: string
@@ -780,6 +789,7 @@ const defaultBusinessProfile: BusinessProfile = {
   email: '',
   address: '',
   gstin: '',
+  fssai: '',
   receiptFooter: 'Thank you. Visit again.',
   logoDataUrl: '',
   defaultGstRate: 0,
@@ -815,6 +825,13 @@ const defaultMenuDisplaySettings: MenuDisplaySettings = {
   itemWidth: 116,
   itemHeight: 122,
   sidePanelWidth: 86,
+}
+
+const lanDiscoveryStorageKey = 'pos-lan-discovery-settings'
+const defaultLanDiscoverySettings: LanDiscoverySettings = {
+  enabled: true,
+  name: 'GI POS Main PC',
+  hostName: 'gi-pos.local',
 }
 
 const defaultReportPrintOptions: ReportPrintOptions = {
@@ -1049,6 +1066,7 @@ function App() {
   const [discountAmount, setDiscountAmount] = useState(0)
   const [servicePercent, setServicePercent] = useState(0)
   const [taxExempt, setTaxExempt] = useState(false)
+  const [roundOffOverride, setRoundOffOverride] = useState<number | null>(null)
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash')
   const [amountReceivedOverride, setAmountReceivedOverride] = useState<number | null>(null)
   const [partTenderMethod, setPartTenderMethod] = useState<PartTenderMethod>('upi')
@@ -1161,6 +1179,9 @@ function App() {
   const [selectedDatabaseBackup, setSelectedDatabaseBackup] = useState('')
   const [databaseBackupStatus, setDatabaseBackupStatus] = useState('Database backup ready')
   const [localServerStatus, setLocalServerStatus] = useState<LocalServerStatus | null>(null)
+  const [lanDiscoverySettings, setLanDiscoverySettings] = useState<LanDiscoverySettings>(() =>
+    normalizeLanDiscoverySettings(loadStoredObject(lanDiscoveryStorageKey, defaultLanDiscoverySettings)),
+  )
   const [syncing, setSyncing] = useState(false)
   const [syncStatus, setSyncStatus] = useState('Cloud sync not configured')
   const [pendingSyncCount, setPendingSyncCount] = useState(0)
@@ -1200,6 +1221,7 @@ function App() {
         startedAt: '',
         error: 'Local server runs only inside the desktop app',
         dbPath: '',
+        discovery: { ...defaultLanDiscoverySettings, serviceType: '_gipos._tcp', state: 'unavailable', error: '' },
       })
       return
     }
@@ -1219,9 +1241,29 @@ function App() {
         startedAt: '',
         error: getErrorMessage(error),
         dbPath: localDatabasePath,
+        discovery: { ...lanDiscoverySettings, serviceType: '_gipos._tcp', state: 'unavailable', error: '' },
       })
     }
-  }, [localDatabasePath])
+  }, [lanDiscoverySettings, localDatabasePath])
+
+  const saveLanDiscoverySettings = useCallback(async () => {
+    const normalized = normalizeLanDiscoverySettings(lanDiscoverySettings)
+    setLanDiscoverySettings(normalized)
+    persistStoredValue(lanDiscoveryStorageKey, normalized, true)
+
+    if (!window.posServer?.configureDiscovery) {
+      return
+    }
+
+    try {
+      setLocalServerStatus(await window.posServer.configureDiscovery(normalized))
+    } catch (error) {
+      setLocalServerStatus((current) => current ? {
+        ...current,
+        discovery: { ...current.discovery, state: 'unavailable', error: getErrorMessage(error) },
+      } : current)
+    }
+  }, [lanDiscoverySettings])
   const refreshDatabaseBackups = useCallback(async () => {
     if (!window.posDb?.listBackups) {
       setDatabaseBackups([])
@@ -1293,6 +1335,7 @@ function App() {
   const [staffPin, setStaffPin] = useState('')
   const [staffPinConfirm, setStaffPinConfirm] = useState('')
   const [staffEditorPermissions, setStaffEditorPermissions] = useState<StaffPermission[]>(defaultCashierPermissions)
+  const [staffEditorDeviceAccess, setStaffEditorDeviceAccess] = useState<'windows' | 'mobile' | 'both'>('both')
   const [staffEditorActive, setStaffEditorActive] = useState(true)
   const [staffEditorStatus, setStaffEditorStatus] = useState('')
   const [serviceStaffEditorId, setServiceStaffEditorId] = useState<string | null>(null)
@@ -1726,11 +1769,15 @@ function App() {
       : isInclusive
         ? roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * line.taxRate) / (100 + line.taxRate), 0))
         : roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * line.taxRate) / 100, 0))
+    const taxableSubtotal = roundMoney(Math.max(0, isInclusive ? subtotal - tax : subtotal))
     const serviceCharge = roundMoney((taxable * servicePercent) / 100)
-    const total = roundMoney(Math.max(0, isInclusive ? taxable + serviceCharge : taxable + tax + serviceCharge))
+    const exactTotal = roundMoney(Math.max(0, isInclusive ? taxable + serviceCharge : taxable + tax + serviceCharge))
+    const automaticRoundOff = roundMoney(Math.round(exactTotal) - exactTotal)
+    const roundOff = roundMoney(roundOffOverride ?? automaticRoundOff)
+    const total = roundMoney(Math.max(0, exactTotal + roundOff))
 
-    return { subtotal, discount, tax, serviceCharge, total }
-  }, [cart, discountAmount, discountMode, discountPercent, servicePercent, businessProfile.gstType, taxExempt])
+    return { subtotal, taxableSubtotal, discount, tax, serviceCharge, roundOff, total }
+  }, [cart, discountAmount, discountMode, discountPercent, servicePercent, businessProfile.gstType, taxExempt, roundOffOverride])
 
   const cashReceived =
     paymentMethod === 'Cash' || paymentMethod === 'Part'
@@ -1918,6 +1965,13 @@ function App() {
             localStorage.getItem(keyboardShortcutsEnabledStorageKey),
           ),
         )
+        const loadedLanDiscoverySettings = normalizeLanDiscoverySettings(
+          readDbValue(
+            snapshot,
+            lanDiscoveryStorageKey,
+            loadStoredObject(lanDiscoveryStorageKey, defaultLanDiscoverySettings),
+          ),
+        )
 
         setCategoryList(loadedCategories)
         setDiningTableGroups(loadedDiningTableGroups)
@@ -1945,6 +1999,7 @@ function App() {
         setKotNumber(getInitialKotNumber(loadedOrders))
         setTheme(loadedTheme === 'dark' ? 'dark' : 'light')
         setKeyboardShortcutsEnabled(loadedKeyboardShortcutsEnabled)
+        setLanDiscoverySettings(loadedLanDiscoverySettings)
         setLocalDatabasePath(snapshot.path)
         setLocalDatabaseDataDir(snapshot.dataDir ?? '')
         setLocalDatabaseBackupDir(snapshot.backupDir ?? '')
@@ -1980,6 +2035,10 @@ function App() {
 
     return () => window.clearInterval(interval)
   }, [refreshLocalServerStatus])
+
+  useEffect(() => {
+    persistStoredValue(lanDiscoveryStorageKey, lanDiscoverySettings, storageReady && !skipPersistenceRef.current)
+  }, [lanDiscoverySettings, storageReady])
 
   useEffect(() => {
     persistStoredValue('printer-profiles', printerProfiles, storageReady && !skipPersistenceRef.current)
@@ -3104,6 +3163,7 @@ function App() {
     setStaffPin('')
     setStaffPinConfirm('')
     setStaffEditorPermissions(defaultCashierPermissions)
+    setStaffEditorDeviceAccess('both')
     setStaffEditorActive(true)
     setStaffEditorStatus('')
   }
@@ -3118,6 +3178,7 @@ function App() {
     setStaffPin('')
     setStaffPinConfirm('')
     setStaffEditorPermissions(user.permissions)
+    setStaffEditorDeviceAccess(user.deviceAccess ?? 'both')
     setStaffEditorActive(user.active)
     setStaffEditorStatus(
       isOwnerStaffUser(user)
@@ -3183,6 +3244,7 @@ function App() {
         name,
         pinSalt: pin?.salt ?? existing.pinSalt,
         pinHash: pin?.hash ?? existing.pinHash,
+        deviceAccess: 'both' as const,
         updatedAt: now,
       }
       setStaffUsers((users) =>
@@ -3201,6 +3263,7 @@ function App() {
       pinSalt: pin?.salt ?? existing?.pinSalt ?? '',
       pinHash: pin?.hash ?? existing?.pinHash ?? '',
       permissions: staffEditorPermissions,
+      deviceAccess: staffEditorDeviceAccess,
       active: staffEditorActive,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -4780,6 +4843,7 @@ function App() {
     setDiscountAmount(0)
     setServicePercent(0)
     setTaxExempt(false)
+    setRoundOffOverride(null)
     setSelectedCustomerId('')
     setCustomer('')
     setCustomerPhone('')
@@ -4974,6 +5038,7 @@ function App() {
     setDiscountAmount(order.discountAmount ?? 0)
     setServicePercent(order.servicePercent)
     setTaxExempt(order.taxExempt ?? false)
+    setRoundOffOverride(order.totals.roundOff ?? 0)
     setPaymentMethod(order.paymentMethod)
     const shouldAutoCalculateCash = order.status !== 'paid' && order.paymentMethod === 'Cash'
     setAmountReceivedOverride(shouldAutoCalculateCash ? null : (order.paymentBreakdown?.cash ?? order.amountReceived))
@@ -6197,6 +6262,7 @@ function App() {
         email: businessProfile.email.trim(),
         address: businessProfile.address.trim(),
         gstin: businessProfile.gstin.trim(),
+        fssai: businessProfile.fssai.trim(),
         footerNote: businessProfile.receiptFooter.trim(),
         logoDataUrl: businessProfile.logoDataUrl,
       },
@@ -6214,18 +6280,22 @@ function App() {
         price: line.price,
         total: lineTotal(line),
         description: line.description ?? '',
+        taxRate: line.taxRate,
         discountMode: line.discountMode ?? 'percent',
         discountPercent: line.discountPercent ?? 0,
         discountAmount: line.discountAmount ?? 0,
       })),
       subtotal: totals.subtotal,
+      taxableSubtotal: totals.taxableSubtotal,
       discount: totals.discount,
       discountMode,
       discountPercent,
       discountAmount,
       tax: totals.tax,
       taxExempt,
+      gstType: businessProfile.gstType,
       serviceCharge: totals.serviceCharge,
+      roundOff: totals.roundOff,
       total: totals.total,
       paid: totals.paid,
       balance: totals.balance,
@@ -8155,6 +8225,13 @@ function App() {
                   />
                 </label>
                 <label>
+                  FSSAI License No.
+                  <input
+                    value={businessProfile.fssai}
+                    onChange={(event) => updateBusinessProfile('fssai', event.target.value)}
+                  />
+                </label>
+                <label>
                   Default GST Rate (%)
                   <input
                     type="number"
@@ -8284,6 +8361,18 @@ function App() {
                   >
                     <option value="active">Active</option>
                     <option value="disabled">Disabled</option>
+                  </select>
+                </label>
+                <label>
+                  Device access
+                  <select
+                    value={isOwnerStaffEditor ? 'both' : staffEditorDeviceAccess}
+                    disabled={isOwnerStaffEditor}
+                    onChange={(event) => setStaffEditorDeviceAccess(event.target.value as 'windows' | 'mobile' | 'both')}
+                  >
+                    <option value="both">Windows and mobile</option>
+                    <option value="windows">Windows only</option>
+                    <option value="mobile">Mobile only</option>
                   </select>
                 </label>
                 <label>
@@ -8729,16 +8818,95 @@ function App() {
                   <span>Database</span>
                   <strong>{localServerStatus?.dbPath || localDatabasePath ? 'SQLite Ready' : 'Not ready'}</strong>
                 </div>
+                <div>
+                  <span>Discovery</span>
+                  <strong>{titleCase(localServerStatus?.discovery.state || 'unavailable')}</strong>
+                </div>
+                <div>
+                  <span>Local Domain</span>
+                  <strong>{localServerStatus?.discovery.hostName || lanDiscoverySettings.hostName}</strong>
+                </div>
               </div>
               {localServerStatus?.error && <div className="sync-message">{localServerStatus.error}</div>}
             </section>
 
-            <section className="home-card network-card">
+            <section className="home-card network-card local-discovery-card">
+              <div className="section-title">
+                <strong>Stable Local Connection</strong>
+                <span>{lanDiscoverySettings.enabled ? 'Enabled' : 'Disabled'}</span>
+              </div>
+              <p className="network-card-copy">
+                Android and other compatible clients discover this Main PC by name, even when the router changes its IP.
+              </p>
+              <label className="sync-toggle local-discovery-toggle">
+                <input
+                  type="checkbox"
+                  checked={lanDiscoverySettings.enabled}
+                  onChange={(event) =>
+                    setLanDiscoverySettings((current) => ({ ...current, enabled: event.target.checked }))
+                  }
+                />
+                <span>
+                  <strong>Advertise Main PC on this LAN</strong>
+                  <small>Works on the same Wi-Fi or wired network; no router DNS entry is required.</small>
+                </span>
+              </label>
+              <div className="local-discovery-fields">
+                <label>
+                  Connection Name
+                  <input
+                    maxLength={48}
+                    value={lanDiscoverySettings.name}
+                    onChange={(event) =>
+                      setLanDiscoverySettings((current) => ({ ...current, name: event.target.value }))
+                    }
+                    placeholder="GI POS Main PC"
+                  />
+                </label>
+                <label>
+                  Local Domain
+                  <input
+                    maxLength={54}
+                    value={lanDiscoverySettings.hostName}
+                    onChange={(event) =>
+                      setLanDiscoverySettings((current) => ({ ...current, hostName: event.target.value }))
+                    }
+                    placeholder="gi-pos.local"
+                  />
+                </label>
+              </div>
+              <button className="home-action primary" type="button" onClick={() => void saveLanDiscoverySettings()}>
+                <Save size={18} />
+                Save Connection
+              </button>
+              {localServerStatus?.discovery.error && (
+                <div className="sync-message">{localServerStatus.discovery.error}</div>
+              )}
+            </section>
+
+            <section className="home-card network-card network-wide-card">
               <div className="section-title">
                 <strong>Client URLs</strong>
                 <span>Same Wi-Fi / LAN</span>
               </div>
               <div className="server-url-list">
+                {lanDiscoverySettings.enabled && (
+                  <div className="server-url-row dns-url-row">
+                    <Wifi size={17} />
+                    <span>{`http://${localServerStatus?.discovery.hostName || lanDiscoverySettings.hostName}:${localServerStatus?.port ?? 8080}`}</span>
+                    <button
+                      className="small-button"
+                      type="button"
+                      onClick={() =>
+                        void copyLocalServerText(
+                          `http://${localServerStatus?.discovery.hostName || lanDiscoverySettings.hostName}:${localServerStatus?.port ?? 8080}`,
+                        )
+                      }
+                    >
+                      Copy
+                    </button>
+                  </div>
+                )}
                 {(localServerUrls.length ? localServerUrls : [localServerPrimaryUrl]).filter(Boolean).map((url) => (
                   <div className="server-url-row" key={url}>
                     <Monitor size={17} />
@@ -8753,9 +8921,8 @@ function App() {
                 )}
               </div>
               <div className="network-note">
-                Other computers or mobile devices can test the connection by opening the URL above. If it does not load,
-                allow this app in Windows Firewall and make sure all devices are on the same network.
-                The address is assigned by your router and can change after a router restart; reserve this Main PC IP in the router for a stable address.
+                Use Find Main PC in the Android app for the most reliable connection. The numeric address remains a fallback.
+                If discovery does not find the PC, allow GI POS through Windows Firewall and confirm both devices are on the same LAN.
               </div>
             </section>
 
@@ -9279,7 +9446,7 @@ function App() {
                 </div>
                 <div className="cart-meta">
                   <span>Qty</span>
-                  <strong>{line.qty.toFixed(3)}</strong>
+                  <strong>{formatItemQuantity(line.qty)}</strong>
                 </div>
                 <div className="cart-meta">
                   <span>Tax</span>
@@ -9427,9 +9594,12 @@ function App() {
                 </label>
               )}
 
-              {cart.length > 0 &&
-                (totals.discount > 0 || totals.tax > 0 || totals.serviceCharge > 0) && (
-                <div className="bill-adjustment-summary">
+              {cart.length > 0 && (
+                <div className="bill-adjustment-summary" aria-label="Bill calculation">
+                  <div className="bill-adjustment-row subtotal-row">
+                    <span>Subtotal <small>excl. GST</small></span>
+                    <strong>{money(totals.taxableSubtotal ?? totals.subtotal)}</strong>
+                  </div>
                   {totals.discount > 0 && (
                     <div className="bill-adjustment-row discount">
                       <span>Discount</span>
@@ -9438,6 +9608,10 @@ function App() {
                   )}
                   {totals.tax > 0 && (
                     <>
+                      <div className="bill-adjustment-row gst-total-row">
+                        <span>GST</span>
+                        <strong>{money(totals.tax)}</strong>
+                      </div>
                       <div className="bill-adjustment-row">
                         <span>CGST</span>
                         <strong>{money(totals.tax / 2)}</strong>
@@ -9454,6 +9628,21 @@ function App() {
                       <strong>{money(totals.serviceCharge)}</strong>
                     </div>
                   )}
+                  <label className="round-off-row">
+                    <span>Round off</span>
+                    <span className="round-off-control">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={totals.roundOff ?? 0}
+                        onChange={(event) => setRoundOffOverride(roundMoney(numberFromInput(event.target.value)))}
+                        aria-label="Round off adjustment"
+                      />
+                      <button type="button" onClick={() => setRoundOffOverride(null)} title="Use automatic rounding">
+                        <RefreshCw size={13} />
+                      </button>
+                    </span>
+                  </label>
                 </div>
               )}
 
@@ -11598,13 +11787,18 @@ function buildCartOnlyTotals(cart: CartLine[]): OrderTotals {
   const tax = isInclusive
     ? roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * Number(line.taxRate || 0)) / (100 + Number(line.taxRate || 0)), 0))
     : roundMoney(cart.reduce((sum, line) => sum + (lineTotal(line) * Number(line.taxRate || 0)) / 100, 0))
-  const total = isInclusive ? subtotal : roundMoney(subtotal + tax)
+  const taxableSubtotal = roundMoney(Math.max(0, isInclusive ? subtotal - tax : subtotal))
+  const exactTotal = isInclusive ? subtotal : roundMoney(subtotal + tax)
+  const roundOff = roundMoney(Math.round(exactTotal) - exactTotal)
+  const total = roundMoney(exactTotal + roundOff)
 
   return {
     subtotal,
+    taxableSubtotal,
     discount: 0,
     tax,
     serviceCharge: 0,
+    roundOff,
     total,
     paid: 0,
     balance: total,
@@ -11615,9 +11809,11 @@ function buildCartOnlyTotals(cart: CartLine[]): OrderTotals {
 function normalizeOrderTotals(totals: Partial<OrderTotals> | undefined, fallback: OrderTotals): OrderTotals {
   return {
     subtotal: roundMoney(Number(totals?.subtotal ?? fallback.subtotal)),
+    taxableSubtotal: roundMoney(Number(totals?.taxableSubtotal ?? fallback.taxableSubtotal ?? Math.max(0, fallback.subtotal - fallback.tax))),
     discount: roundMoney(Number(totals?.discount ?? fallback.discount)),
     tax: roundMoney(Number(totals?.tax ?? fallback.tax)),
     serviceCharge: roundMoney(Number(totals?.serviceCharge ?? fallback.serviceCharge)),
+    roundOff: roundMoney(Number(totals?.roundOff ?? fallback.roundOff ?? 0)),
     total: roundMoney(Number(totals?.total ?? fallback.total)),
     paid: roundMoney(Number(totals?.paid ?? fallback.paid)),
     balance: roundMoney(Number(totals?.balance ?? fallback.balance)),
@@ -13039,6 +13235,25 @@ function normalizeApiUrl(value: string) {
   return value.trim().replace(/\/+$/, '')
 }
 
+function normalizeLanDiscoverySettings(value: Partial<LanDiscoverySettings> | null | undefined): LanDiscoverySettings {
+  const name = String(value?.name || defaultLanDiscoverySettings.name).trim().replace(/\s+/g, ' ').slice(0, 48)
+  const requestedHost = String(value?.hostName || defaultLanDiscoverySettings.hostName)
+    .trim()
+    .toLowerCase()
+    .replace(/\.local\.?$/i, '')
+  const hostLabel = requestedHost
+    .normalize('NFKD')
+    .replace(/[^a-z0-9-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+
+  return {
+    enabled: value?.enabled !== false,
+    name: name || defaultLanDiscoverySettings.name,
+    hostName: `${hostLabel || 'gi-pos'}.local`,
+  }
+}
+
 function normalizeAppMode(value: unknown): AppMode {
   return String(value || '').trim().toLowerCase() === 'offline' ? 'offline' : 'cloud'
 }
@@ -13348,6 +13563,14 @@ function normalizeSavedOrderPayment(order: SavedOrder): SavedOrder {
   }
   const amountReceived = roundMoney(paymentBreakdown.cash + paymentBreakdown.upi + paymentBreakdown.card)
   const total = Number(legacyOrder.totals?.total ?? 0)
+  const savedSubtotal = Number(legacyOrder.totals?.subtotal ?? 0)
+  const currentBusinessProfile = loadStoredObject('pos-business-profile', defaultBusinessProfile)
+  const taxableSubtotal = Number(
+    legacyOrder.totals?.taxableSubtotal ??
+      (currentBusinessProfile?.gstType === 'inclusive'
+        ? Math.max(0, savedSubtotal - Number(legacyOrder.totals?.tax ?? 0))
+        : savedSubtotal),
+  )
   const paid = Number(
     legacyOrder.totals?.paid ?? (paymentMethod === 'Due' ? 0 : Math.min(amountReceived, total)),
   )
@@ -13374,10 +13597,12 @@ function normalizeSavedOrderPayment(order: SavedOrder): SavedOrder {
     paymentBreakdown,
     amountReceived,
     totals: {
-      subtotal: Number(legacyOrder.totals?.subtotal ?? 0),
+      subtotal: savedSubtotal,
+      taxableSubtotal: roundMoney(taxableSubtotal),
       discount: Number(legacyOrder.totals?.discount ?? 0),
       tax: Number(legacyOrder.totals?.tax ?? 0),
       serviceCharge: Number(legacyOrder.totals?.serviceCharge ?? 0),
+      roundOff: roundMoney(Number(legacyOrder.totals?.roundOff ?? 0)),
       total,
       paid: roundMoney(paid),
       balance: roundMoney(balance),
@@ -13698,6 +13923,7 @@ function normalizeBusinessProfile(profile: Partial<BusinessProfile> = defaultBus
     email: String(profile.email ?? defaultBusinessProfile.email),
     address: String(profile.address ?? defaultBusinessProfile.address),
     gstin: String(profile.gstin ?? defaultBusinessProfile.gstin),
+    fssai: String(profile.fssai ?? defaultBusinessProfile.fssai),
     receiptFooter: String(profile.receiptFooter ?? defaultBusinessProfile.receiptFooter),
     logoDataUrl: String(profile.logoDataUrl ?? defaultBusinessProfile.logoDataUrl),
     defaultGstRate: Number(profile.defaultGstRate ?? defaultBusinessProfile.defaultGstRate) || 0,
@@ -13708,6 +13934,7 @@ function normalizeBusinessProfile(profile: Partial<BusinessProfile> = defaultBus
       normalizedProfile.email.trim() ||
       normalizedProfile.address.trim() ||
       normalizedProfile.gstin.trim() ||
+      normalizedProfile.fssai.trim() ||
       normalizedProfile.logoDataUrl,
   )
   const usesOldAppIdentity =
@@ -13867,6 +14094,9 @@ function normalizeStaffUsers(users: StaffUser[]) {
       recoveryHash: user.recoveryHash ? String(user.recoveryHash) : undefined,
       recoveryCodeSetAt: user.recoveryCodeSetAt ? String(user.recoveryCodeSetAt) : undefined,
       permissions: normalizeStaffPermissions(user.permissions),
+      deviceAccess: user.deviceAccess === 'windows' || user.deviceAccess === 'mobile' || user.deviceAccess === 'both'
+        ? user.deviceAccess
+        : 'both',
       active: user.active !== false,
       createdAt: user.createdAt || new Date().toISOString(),
       updatedAt: user.updatedAt || new Date().toISOString(),

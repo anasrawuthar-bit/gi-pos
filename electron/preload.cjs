@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('posUpdater', {
 
 contextBridge.exposeInMainWorld('posServer', {
   getStatus: () => ipcRenderer.invoke('lan-server:status'),
+  configureDiscovery: (settings) => ipcRenderer.invoke('lan-server:configure-discovery', settings),
   stop: () => ipcRenderer.invoke('lan-server:stop'),
 });
 

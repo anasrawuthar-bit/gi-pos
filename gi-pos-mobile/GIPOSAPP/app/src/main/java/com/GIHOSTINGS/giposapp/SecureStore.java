@@ -22,6 +22,9 @@ public final class SecureStore {
   private static final String KEY_ALIAS = "gi_pos_mobile_session_v1";
   private static final String SESSION = "session";
   private static final String SIGNED_OUT = "signed_out";
+  private static final String LOCAL_PIN = "local_pin_hash";
+  private static final String LOCAL_SERVER_NAME = "local_server_name";
+  private static final String LOCAL_SERVER_ENDPOINT = "local_server_endpoint";
 
   public static final class Session {
     public final String serverUrl, token, restaurantId, businessName, ownerName, planId, plan, status, activatedAt, expiresAt, deviceId, apiKey;
@@ -67,7 +70,23 @@ public final class SecureStore {
 
   public static boolean isSignedOut(Context context) { return prefs(context).getBoolean(SIGNED_OUT, false); }
   public static void signOut(Context context) { prefs(context).edit().putBoolean(SIGNED_OUT, true).apply(); }
-  public static void clear(Context context) { prefs(context).edit().remove(SESSION).remove(SIGNED_OUT).apply(); }
+  public static boolean hasPin(Context context) { return !prefs(context).getString(LOCAL_PIN, "").isBlank(); }
+  public static void setPin(Context context, String pin) throws Exception { prefs(context).edit().putString(LOCAL_PIN, CredentialSecurity.hashPin(pin)).commit(); }
+  public static boolean verifyPin(Context context, String pin) { return CredentialSecurity.verifyPin(pin, prefs(context).getString(LOCAL_PIN, "")); }
+  public static void clearPin(Context context) { prefs(context).edit().remove(LOCAL_PIN).apply(); }
+  public static String localServerName(Context context) { return prefs(context).getString(LOCAL_SERVER_NAME, "GI POS Main PC"); }
+  public static String localServerEndpoint(Context context) { return prefs(context).getString(LOCAL_SERVER_ENDPOINT, ""); }
+  public static void setLocalServerName(Context context, String name) {
+    String value = name == null ? "" : name.trim();
+    prefs(context).edit().putString(LOCAL_SERVER_NAME, value.isBlank() ? "GI POS Main PC" : value).apply();
+  }
+  public static void saveLocalServer(Context context, String name, String endpoint) {
+    prefs(context).edit()
+      .putString(LOCAL_SERVER_NAME, name == null || name.isBlank() ? "GI POS Main PC" : name.trim())
+      .putString(LOCAL_SERVER_ENDPOINT, endpoint == null ? "" : endpoint.trim())
+      .apply();
+  }
+  public static void clear(Context context) { prefs(context).edit().remove(SESSION).remove(SIGNED_OUT).remove(LOCAL_PIN).apply(); }
   private static SharedPreferences prefs(Context context) { return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE); }
 
   private static SecretKey key() throws Exception {

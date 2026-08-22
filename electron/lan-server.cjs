@@ -1,6 +1,7 @@
 const http = require('node:http');
 const os = require('node:os');
 const crypto = require('node:crypto');
+const Bonjour = require('bonjour-service');
 
 const preferredPort = Number(process.env.GI_POS_LAN_PORT || 8080);
 const maxPortAttempts = 20;
@@ -10,6 +11,10 @@ async function createLanServer({ app, getDatabase, printKot }) {
   let server;
   let port = preferredPort;
   let lastError = '';
+  let bonjour;
+  let discoveryService;
+  let discoveryError = '';
+  let discoverySettings = readDiscoverySettings(getDatabase);
   const getStatus = () => {
     const addresses = getLanAddresses();
     const urls = addresses.map((address) => `http://${address}:${port}`);
@@ -26,6 +31,14 @@ async function createLanServer({ app, getDatabase, printKot }) {
       startedAt: server ? startedAt : '',
       error: server ? '' : lastError || 'LAN server did not start',
       dbPath: getDatabase()?.path || '',
+      discovery: {
+        enabled: discoverySettings.enabled,
+        name: discoverySettings.name,
+        hostName: discoverySettings.hostName,
+        serviceType: '_gipos._tcp',
+        state: discoveryService ? 'advertising' : discoverySettings.enabled ? 'unavailable' : 'disabled',
+        error: discoveryError,
+      },
     };
   };
 
@@ -44,10 +57,63 @@ async function createLanServer({ app, getDatabase, printKot }) {
     }
   }
 
+  const configureDiscovery = async (value) => {
+    discoverySettings = normalizeDiscoverySettings(value);
+    discoveryError = '';
+
+    if (discoveryService) {
+      await stopBonjourService(discoveryService);
+      discoveryService = undefined;
+    }
+
+    if (!server || !discoverySettings.enabled) {
+      return getStatus();
+    }
+
+    try {
+      bonjour ??= new Bonjour(undefined, (error) => {
+        discoveryError = error?.message || 'Local discovery stopped unexpectedly';
+      });
+      discoveryService = bonjour.publish({
+        name: discoverySettings.name,
+        type: 'gipos',
+        protocol: 'tcp',
+        port,
+        host: discoverySettings.hostName,
+        disableIPv6: true,
+        txt: {
+          app: 'GI POS Restaurant',
+          version: app.getVersion(),
+          statusPath: '/api/server/status',
+          apiPath: '/api/mobile/bootstrap',
+        },
+      });
+      discoveryService.on('error', (error) => {
+        discoveryError = error?.message || 'Local discovery could not advertise this Main PC';
+      });
+    } catch (error) {
+      discoveryService = undefined;
+      discoveryError = error?.message || 'Local discovery could not start';
+    }
+
+    return getStatus();
+  };
+
+  await configureDiscovery(discoverySettings);
+
   return {
     getStatus,
+    configureDiscovery,
     close: () =>
       new Promise((resolve) => {
+        if (discoveryService) {
+          discoveryService.stop(() => undefined);
+          discoveryService = undefined;
+        }
+        if (bonjour) {
+          bonjour.destroy(() => undefined);
+          bonjour = undefined;
+        }
         if (!server) {
           resolve();
           return;
@@ -60,17 +126,61 @@ async function createLanServer({ app, getDatabase, printKot }) {
 
 function registerLanServerHandlers(ipcMain, getServer) {
   ipcMain.handle('lan-server:status', async () => getServer()?.getStatus() || getStoppedStatus());
+  ipcMain.handle('lan-server:configure-discovery', async (_event, settings) => {
+    const server = getServer();
+    return server ? server.configureDiscovery(settings) : getStoppedStatus();
+  });
+}
+
+function readDiscoverySettings(getDatabase) {
+  try {
+    const stored = getDatabase()?.getSnapshot()?.values?.['pos-lan-discovery-settings'];
+    return normalizeDiscoverySettings(stored ? JSON.parse(stored) : undefined);
+  } catch {
+    return normalizeDiscoverySettings();
+  }
+}
+
+function normalizeDiscoverySettings(value = {}) {
+  const rawName = String(value?.name || 'GI POS Main PC').trim().replace(/\s+/g, ' ').slice(0, 48);
+  const name = rawName || 'GI POS Main PC';
+  const requestedHost = String(value?.hostName || '').trim().toLowerCase();
+  const hostLabel = (requestedHost.replace(/\.local\.?$/i, '') || name)
+    .normalize('NFKD')
+    .replace(/[^a-z0-9-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'gi-pos';
+
+  return {
+    enabled: value?.enabled !== false,
+    name,
+    hostName: `${hostLabel}.local`,
+  };
+}
+
+function stopBonjourService(service) {
+  return new Promise((resolve) => {
+    try {
+      service.stop(resolve);
+    } catch {
+      resolve();
+    }
+  });
 }
 
 function createRequestHandler({ app, getDatabase, getStatus, printKot }) {
   const sessionSecret = crypto.randomBytes(32);
+  const loginAttempts = new Map();
+  const revokedSessions = new Set();
 
   return async (request, response) => {
     const url = new URL(request.url || '/', 'http://127.0.0.1');
+    const requestId = crypto.randomUUID();
 
     response.setHeader('Access-Control-Allow-Origin', '*');
     response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-GI-Device-Name, X-GI-Device-Type');
+    response.setHeader('X-Request-Id', requestId);
 
     if (request.method === 'OPTIONS') {
       response.writeHead(204);
@@ -115,8 +225,18 @@ function createRequestHandler({ app, getDatabase, getStatus, printKot }) {
       return;
     }
 
+    if (request.method === 'GET' && url.pathname === '/api/mobile/login-options') {
+      sendJson(response, 200, buildMobileLoginOptionsPayload({ app, getDatabase, getStatus, requestId }));
+      return;
+    }
+
     if (request.method === 'GET' && url.pathname === '/api/mobile/bootstrap') {
-      sendJson(response, 200, buildMobileBootstrapPayload({ app, getDatabase, getStatus }));
+      try {
+        const user = verifyMobileSession(getDatabase, request, sessionSecret, revokedSessions);
+        sendJson(response, 200, buildMobileBootstrapPayload({ app, getDatabase, getStatus, user, requestId }));
+      } catch (error) {
+        sendApiError(response, error, 'Unable to load POS data', requestId);
+      }
       return;
     }
 
@@ -151,40 +271,54 @@ function createRequestHandler({ app, getDatabase, getStatus, printKot }) {
 
     if (request.method === 'POST' && url.pathname === '/api/mobile/login') {
       try {
+        enforceLoginRateLimit(request, loginAttempts);
         const body = await readJsonBody(request);
-        const result = await loginMobileUser(getDatabase, body, sessionSecret);
+        const result = await loginMobileUser(getDatabase, body, sessionSecret, request, requestId);
+        clearLoginFailures(request, loginAttempts);
         sendJson(response, 200, result);
       } catch (error) {
-        sendJson(response, error?.statusCode || 500, { ok: false, error: error?.message || 'Login failed' });
+        recordLoginFailure(request, loginAttempts, error);
+        sendApiError(response, error, 'Login failed', requestId);
+      }
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/mobile/logout') {
+      try {
+        const user = verifyMobileSession(getDatabase, request, sessionSecret, revokedSessions);
+        if (user.sessionId) revokedSessions.add(user.sessionId);
+        sendJson(response, 200, { ok: true, requestId });
+      } catch (error) {
+        sendApiError(response, error, 'Logout failed', requestId);
       }
       return;
     }
 
     if (request.method === 'POST' && url.pathname === '/api/mobile/orders/save') {
       try {
-        const user = verifyMobileSession(getDatabase, request, sessionSecret);
+        const user = verifyMobileSession(getDatabase, request, sessionSecret, revokedSessions);
         const body = await readJsonBody(request);
         const result = saveMobileOrder(getDatabase, user, body);
         sendJson(response, 200, result);
       } catch (error) {
-        sendJson(response, error?.statusCode || 500, { ok: false, error: error?.message || 'Order save failed' });
+        sendApiError(response, error, 'Order save failed', requestId);
       }
       return;
     }
 
     if (request.method === 'POST' && url.pathname === '/api/mobile/kot/print') {
       try {
-        const user = verifyMobileSession(getDatabase, request, sessionSecret);
+        const user = verifyMobileSession(getDatabase, request, sessionSecret, revokedSessions);
         const body = await readJsonBody(request);
         const result = await printMobileKot(getDatabase, printKot, user, body);
         sendJson(response, 200, result);
       } catch (error) {
-        sendJson(response, error?.statusCode || 500, { ok: false, error: error?.message || 'KOT print failed' });
+        sendApiError(response, error, 'KOT print failed', requestId);
       }
       return;
     }
 
-    sendJson(response, 404, { ok: false, error: 'Not found' });
+    sendJson(response, 404, { ok: false, error: 'Not found', code: 'NOT_FOUND', retryable: false, requestId });
   };
 }
 
@@ -763,7 +897,16 @@ function buildMobileAppHtml(status, pathname) {
         });
       }
       async function loadData() {
-        state.data = await fetchJson('/api/mobile/bootstrap');
+        if (!state.sessionToken) {
+          const loginOptions = await fetchJson('/api/mobile/login-options');
+          state.data = {
+            appName: loginOptions.appName,
+            version: loginOptions.version,
+            staffUsers: loginOptions.users || [],
+          };
+        } else {
+          state.data = await authFetchJson('/api/mobile/bootstrap');
+        }
         renderShell();
       }
       function renderShell() {
@@ -1067,13 +1210,19 @@ function buildMobileAppHtml(status, pathname) {
           const result = await fetchJson('/api/mobile/login', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ userId: byId('userSelect').value, pin: byId('pinInput').value }),
+          body: JSON.stringify({
+            userId: byId('userSelect').value,
+            pin: byId('pinInput').value,
+            deviceType: 'mobile',
+            deviceName: navigator.userAgent.slice(0, 80),
+          }),
           });
           state.user = result.user;
           state.sessionToken = result.sessionToken || '';
           localStorage.setItem('giMobileUser', JSON.stringify(state.user));
           localStorage.setItem('giMobileSession', state.sessionToken);
           byId('pinInput').value = '';
+          await loadData();
           state.activeScreen = initialScreen === 'home' ? 'home' : 'pos';
           history.replaceState(null, '', state.activeScreen === 'home' ? '/home' : '/pos');
           renderScreen();
@@ -1124,12 +1273,16 @@ function buildMobileAppHtml(status, pathname) {
         }
       });
       byId('logoutBtn').addEventListener('click', () => {
+        const token = state.sessionToken;
+        if (token) {
+          fetch('/api/mobile/logout', { method: 'POST', headers: { authorization: 'Bearer ' + token } }).catch(() => undefined);
+        }
         state.user = null;
         state.sessionToken = '';
         localStorage.removeItem('giMobileUser');
         localStorage.removeItem('giMobileSession');
         history.replaceState(null, '', '/login');
-        renderScreen();
+        loadData().catch((error) => alert(error.message));
       });
       loadData().catch((error) => {
         byId('loginStatus').className = 'status error';
@@ -1611,7 +1764,22 @@ function buildQrOrderHtml(status, tableName) {
 </html>`;
 }
 
-function buildMobileBootstrapPayload({ app, getDatabase, getStatus }) {
+function buildMobileLoginOptionsPayload({ app, getDatabase, getStatus, requestId }) {
+  const staffUsers = normalizeStaffUsers(readStoredJson(getSnapshotValues(getDatabase), 'pos-staff-users', []));
+
+  return {
+    ok: true,
+    requestId,
+    appName: app.getName(),
+    version: app.getVersion(),
+    server: getPublicServerStatus(getStatus()),
+    users: staffUsers
+      .filter((user) => user.active && user.permissions.includes('pos_access'))
+      .map((user) => ({ id: user.id, name: user.name })),
+  };
+}
+
+function buildMobileBootstrapPayload({ app, getDatabase, getStatus, user, requestId }) {
   const values = getSnapshotValues(getDatabase);
   const businessProfile = normalizeBusinessProfile(readStoredJson(values, 'pos-business-profile', {}), app);
   const categories = normalizeCategories(readStoredJson(values, 'pos-categories', []));
@@ -1639,9 +1807,17 @@ function buildMobileBootstrapPayload({ app, getDatabase, getStatus }) {
 
   return {
     ok: true,
+    requestId,
     appName: app.getName(),
     version: app.getVersion(),
-    server: getStatus(),
+    server: getPublicServerStatus(getStatus()),
+    currentUser: {
+      id: user.id,
+      name: user.name,
+      permissions: user.permissions,
+      deviceType: user.deviceType,
+      deviceName: user.deviceName,
+    },
     businessProfile,
     categories,
     diningTableGroups,
@@ -1935,6 +2111,9 @@ function normalizeStaffUsers(users) {
       pinSalt: String(user.pinSalt || '').trim(),
       pinHash: String(user.pinHash || '').trim(),
       permissions: Array.isArray(user.permissions) ? user.permissions.map((permission) => String(permission)) : ['pos_access'],
+      deviceAccess: ['windows', 'mobile', 'both'].includes(String(user.deviceAccess || '').toLowerCase())
+        ? String(user.deviceAccess).toLowerCase()
+        : 'both',
       active: user.active !== false,
     }))
     .filter((user) => user.id && user.pinSalt && user.pinHash);
@@ -2211,9 +2390,11 @@ function readJsonBody(request) {
   });
 }
 
-async function loginMobileUser(getDatabase, body, sessionSecret) {
+async function loginMobileUser(getDatabase, body, sessionSecret, request, requestId) {
   const userId = String(body?.userId || '').trim();
   const pin = String(body?.pin || '');
+  const deviceType = normalizeDeviceType(body?.deviceType || request?.headers?.['x-gi-device-type']);
+  const deviceName = normalizeDeviceName(body?.deviceName || request?.headers?.['x-gi-device-name']);
 
   if (!userId || !pin) {
     throw createHttpError(400, 'Select user and enter PIN');
@@ -2230,20 +2411,43 @@ async function loginMobileUser(getDatabase, body, sessionSecret) {
     throw createHttpError(403, 'POS permission is required');
   }
 
+  if (!canUserAccessDevice(user, deviceType)) {
+    throw createHttpError(403, `${deviceType === 'windows' ? 'Windows' : 'Mobile'} access is not enabled for this user`);
+  }
+
   if (!verifyPin(pin, user.pinSalt, user.pinHash)) {
     throw createHttpError(403, 'Wrong PIN');
   }
 
   return {
     ok: true,
-    sessionToken: signMobileSession(user.id, sessionSecret),
+    requestId,
+    sessionToken: signMobileSession({ userId: user.id, deviceType, deviceName }, sessionSecret),
     user: {
       id: user.id,
       name: user.name,
       active: user.active,
       permissions: user.permissions,
+      deviceType,
+      deviceName,
     },
   };
+}
+
+function normalizeDeviceType(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'windows' || normalized === 'counter') return 'windows';
+  if (normalized === 'android' || normalized === 'mobile' || normalized === 'pilot') return 'mobile';
+  return 'mobile';
+}
+
+function normalizeDeviceName(value) {
+  return String(value || 'POS client').trim().replace(/\s+/g, ' ').slice(0, 80) || 'POS client';
+}
+
+function canUserAccessDevice(user, deviceType) {
+  const access = String(user.deviceAccess || 'both').toLowerCase();
+  return access === 'both' || access === deviceType;
 }
 
 function saveMobileOrder(getDatabase, user, body) {
@@ -2307,6 +2511,15 @@ function saveMobileOrderToDatabase(getDatabase, user, body, status) {
   const businessProfile = normalizeBusinessProfile(readStoredJson(values, 'pos-business-profile', {}), { getName: () => 'GI POS Restaurant' });
   const orderId = String(body?.orderId || '').trim() || createOrderId();
   const existingOrder = orders.find((order) => order.id === orderId);
+  const expectedUpdatedAt = String(body?.expectedUpdatedAt || '').trim();
+
+  if (existingOrder && expectedUpdatedAt && existingOrder.updatedAt !== expectedUpdatedAt) {
+    throw createHttpError(
+      409,
+      'This order was changed on another device. Refresh the table and review the latest items before saving again.',
+      'ORDER_CHANGED',
+    );
+  }
   const orderType = normalizeOrderType(body?.orderType);
   const seatingMode = body?.seatingMode === 'group' ? 'group' : 'individual';
   const selectedTables = parseDiningTableNames(body?.tables || body?.table);
@@ -2353,6 +2566,8 @@ function saveMobileOrderToDatabase(getDatabase, user, body, status) {
     source: 'lan-pos',
     sourceUserId: user.id,
     sourceUserName: user.name,
+    sourceDeviceType: user.deviceType,
+    sourceDeviceName: user.deviceName,
   };
   const nextOrders = [order, ...orders.filter((savedOrder) => savedOrder.id !== orderId)];
   database.setValue('pos-orders', JSON.stringify(nextOrders));
@@ -2472,13 +2687,21 @@ function mergeQrOrderNotes(existingNote, nextNote) {
   return uniqueNotes.join(' / ').slice(0, 240);
 }
 
-function signMobileSession(userId, sessionSecret) {
-  const payload = Buffer.from(JSON.stringify({ userId, iat: Date.now() })).toString('base64url');
+function signMobileSession({ userId, deviceType, deviceName }, sessionSecret) {
+  const issuedAt = Date.now();
+  const payload = Buffer.from(JSON.stringify({
+    userId,
+    deviceType,
+    deviceName,
+    sessionId: crypto.randomUUID(),
+    iat: issuedAt,
+    exp: issuedAt + 24 * 60 * 60 * 1000,
+  })).toString('base64url');
   const signature = crypto.createHmac('sha256', sessionSecret).update(payload).digest('base64url');
   return `${payload}.${signature}`;
 }
 
-function verifyMobileSession(getDatabase, request, sessionSecret) {
+function verifyMobileSession(getDatabase, request, sessionSecret, revokedSessions = new Set()) {
   const authHeader = String(request.headers.authorization || '');
   const token = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';
   const [payloadText, signature] = token.split('.');
@@ -2499,9 +2722,12 @@ function verifyMobileSession(getDatabase, request, sessionSecret) {
     throw createHttpError(401, 'Invalid login session');
   }
 
-  const maxAgeMs = 24 * 60 * 60 * 1000;
-  if (!payload?.userId || Date.now() - Number(payload.iat || 0) > maxAgeMs) {
+  if (!payload?.userId || !payload?.sessionId || Date.now() > Number(payload.exp || 0)) {
     throw createHttpError(401, 'Login session expired');
+  }
+
+  if (revokedSessions.has(String(payload.sessionId))) {
+    throw createHttpError(401, 'Login session ended');
   }
 
   const users = normalizeStaffUsers(readStoredJson(getSnapshotValues(getDatabase), 'pos-staff-users', []));
@@ -2510,7 +2736,50 @@ function verifyMobileSession(getDatabase, request, sessionSecret) {
     throw createHttpError(403, 'POS permission is required');
   }
 
-  return user;
+  if (!canUserAccessDevice(user, normalizeDeviceType(payload.deviceType))) {
+    throw createHttpError(403, 'This device is not enabled for the user');
+  }
+
+  return {
+    ...user,
+    sessionId: String(payload.sessionId),
+    deviceType: normalizeDeviceType(payload.deviceType),
+    deviceName: normalizeDeviceName(payload.deviceName),
+  };
+}
+
+function getLoginAttemptKey(request) {
+  return String(request?.socket?.remoteAddress || 'unknown');
+}
+
+function enforceLoginRateLimit(request, attempts) {
+  const key = getLoginAttemptKey(request);
+  const entry = attempts.get(key);
+  if (!entry) return;
+  if (Date.now() - entry.firstAttemptAt > 10 * 60 * 1000) {
+    attempts.delete(key);
+    return;
+  }
+  if (entry.count >= 8) {
+    const error = createHttpError(429, 'Too many login attempts. Wait a few minutes and try again.');
+    error.retryable = true;
+    throw error;
+  }
+}
+
+function recordLoginFailure(request, attempts, error) {
+  if (Number(error?.statusCode) === 429) return;
+  const key = getLoginAttemptKey(request);
+  const entry = attempts.get(key);
+  if (!entry || Date.now() - entry.firstAttemptAt > 10 * 60 * 1000) {
+    attempts.set(key, { count: 1, firstAttemptAt: Date.now() });
+    return;
+  }
+  attempts.set(key, { ...entry, count: entry.count + 1 });
+}
+
+function clearLoginFailures(request, attempts) {
+  attempts.delete(getLoginAttemptKey(request));
 }
 
 function verifyPin(pin, salt, expectedHash) {
@@ -2535,9 +2804,10 @@ function safeEqualBuffer(first, second) {
   return crypto.timingSafeEqual(first, second);
 }
 
-function createHttpError(statusCode, message) {
+function createHttpError(statusCode, message, code) {
   const error = new Error(message);
   error.statusCode = statusCode;
+  if (code) error.code = code;
   return error;
 }
 
@@ -2563,7 +2833,54 @@ function getStoppedStatus() {
     startedAt: '',
     error: 'LAN server not available',
     dbPath: '',
+    discovery: {
+      enabled: false,
+      name: 'GI POS Main PC',
+      hostName: 'gi-pos.local',
+      serviceType: '_gipos._tcp',
+      state: 'unavailable',
+      error: '',
+    },
   };
+}
+
+function getPublicServerStatus(status = {}) {
+  return {
+    enabled: Boolean(status.enabled),
+    port: Number(status.port || preferredPort),
+    appName: String(status.appName || 'GI POS Restaurant'),
+    version: String(status.version || ''),
+    computerName: String(status.computerName || ''),
+    primaryUrl: String(status.primaryUrl || ''),
+    startedAt: String(status.startedAt || ''),
+  };
+}
+
+function sendApiError(response, error, fallbackMessage, requestId) {
+  const statusCode = Number(error?.statusCode) || 500;
+  const message = statusCode >= 500 ? fallbackMessage : error?.message || fallbackMessage;
+  const code = String(error?.code || getHttpErrorCode(statusCode));
+
+  if (statusCode >= 500) {
+    console.error(`[LAN API ${requestId}] ${fallbackMessage}:`, error);
+  }
+
+  sendJson(response, statusCode, {
+    ok: false,
+    error: message,
+    code,
+    retryable: Boolean(error?.retryable ?? statusCode >= 500),
+    requestId,
+  });
+}
+
+function getHttpErrorCode(statusCode) {
+  if (statusCode === 400) return 'INVALID_REQUEST';
+  if (statusCode === 401) return 'SESSION_REQUIRED';
+  if (statusCode === 403) return 'ACCESS_DENIED';
+  if (statusCode === 409) return 'ORDER_CONFLICT';
+  if (statusCode === 429) return 'TOO_MANY_ATTEMPTS';
+  return 'SERVER_ERROR';
 }
 
 module.exports = {

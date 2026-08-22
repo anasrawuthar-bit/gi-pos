@@ -126,33 +126,8 @@ public final class CloudClient {
     String value = input == null ? "" : input.trim().replaceAll("/+$", "");
     URI uri = URI.create(value);
     if (!("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme())) || uri.getHost() == null) throw new Exception("Enter a valid server address.");
-    if ("http".equalsIgnoreCase(uri.getScheme()) && !isPrivateNetworkHost(uri.getHost())) {
-      throw new Exception("Public servers must use HTTPS. HTTP is allowed only for a private LAN address.");
-    }
+    if (!"https".equalsIgnoreCase(uri.getScheme())) throw new Exception("Secure sign-in requires an HTTPS server address.");
     return value;
-  }
-
-  private static boolean isPrivateNetworkHost(String hostValue) {
-    String host = String.valueOf(hostValue).trim().toLowerCase();
-    if (host.equals("localhost") || host.equals("::1") || host.endsWith(".local")) return true;
-    if (host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:")) return true;
-
-    String[] parts = host.split("\\.");
-    if (parts.length != 4) return false;
-    try {
-      int first = Integer.parseInt(parts[0]);
-      int second = Integer.parseInt(parts[1]);
-      for (String part : parts) {
-        int value = Integer.parseInt(part);
-        if (value < 0 || value > 255) return false;
-      }
-      return first == 10
-        || first == 127
-        || (first == 192 && second == 168)
-        || (first == 172 && second >= 16 && second <= 31);
-    } catch (NumberFormatException ignored) {
-      return false;
-    }
   }
 
   private static String first(JSONObject value, String snake, String camel) {

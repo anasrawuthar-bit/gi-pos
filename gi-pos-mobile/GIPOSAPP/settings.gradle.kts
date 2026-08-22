@@ -22,5 +22,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "GI POS APP"
+rootProject.name = "GIPOSAPP"
 include(":app")
+project(":app").projectDir = File(settingsDir, "app")

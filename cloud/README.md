@@ -98,6 +98,22 @@ Download button:
 - The server looks for the latest `Setup.exe` in `cloud/updates/win` using `latest.yml`.
 - During local development only, it can also fall back to the project `release/` folder.
 
+## Android APK download
+
+The client portal also provides the native Android build at:
+
+```text
+https://goldensea.gihostings.in/download/android
+```
+
+Build the Android application, then copy the APK into `cloud/updates/android/` on the VPS. The newest `.apk` file in that directory is served. To keep APK files outside the deployed source tree, set:
+
+```bash
+GI_ANDROID_UPDATE_DIR=/var/lib/gipos/updates/android
+```
+
+The Android plan remains platform-isolated: Android-plan accounts activate only GI POS Mobile, while Premium, Gold, and Offline activate only the Windows app.
+
 Desktop app user PIN reset flow:
 
 1. Run `Manual Sync` once from the desktop app after this update. This publishes app users, permissions, and hashed PIN data for restore/login.
